@@ -389,6 +389,38 @@ try {
         $botName = "$botName#$($discordUser.discriminator)"
     }
     Write-Check 'Discord Bot' $botName $true
+
+    # Check privileged intents via /applications/@me
+    try {
+        $appInfo = Invoke-RestMethod -Uri 'https://discord.com/api/v10/applications/@me' -Headers $discordHeaders -TimeoutSec 10 -ErrorAction Stop
+        $flags = [long]($appInfo.flags)
+        # GatewayMessageContent = 1 << 18 (262144), GatewayMessageContentLimited = 1 << 19 (524288)
+        $hasMessageContent = ($flags -band 262144) -ne 0 -or ($flags -band 524288) -ne 0
+        if ($hasMessageContent) {
+            Write-Check 'Message Intent' 'enabled' $true
+        } else {
+            Write-Check 'Message Intent' 'NOT enabled' $false
+            Write-Warn '  The bot needs Message Content Intent to read messages.'
+            Write-Warn '  Enable it: Discord Developer Portal > Bot > Privileged Gateway Intents'
+        }
+    } catch {
+        Write-Check 'Message Intent' 'could not verify (API error)' $false
+        Write-Warn '  Check manually: Developer Portal > Bot > Privileged Gateway Intents'
+    }
+
+    # Check if bot is in any guilds
+    try {
+        $guilds = Invoke-RestMethod -Uri 'https://discord.com/api/v10/users/@me/guilds?limit=1' -Headers $discordHeaders -TimeoutSec 10 -ErrorAction Stop
+        if ($guilds -and $guilds.Count -gt 0) {
+            Write-Check 'Bot Guilds' "in at least 1 server" $true
+        } else {
+            Write-Check 'Bot Guilds' 'not in any server yet' $false
+            Write-Warn '  Invite the bot first: Developer Portal > OAuth2 > URL Generator'
+            Write-Warn '  Scopes: bot, applications.commands'
+        }
+    } catch {
+        Write-Check 'Bot Guilds' 'could not check' $false
+    }
 } catch {
     $discordStatus = $null
     if ($_.Exception.Response) {
@@ -408,6 +440,14 @@ try {
 # ── GitHub Token (if set) ──
 $ghToken = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN','Process')
 if ($ghToken) {
+    # Detect token type
+    $ghTokenType = 'unknown'
+    if ($ghToken -match '^ghp_')         { $ghTokenType = 'PAT (classic)' }
+    elseif ($ghToken -match '^github_pat_') { $ghTokenType = 'PAT (fine-grained)' }
+    elseif ($ghToken -match '^gho_')     { $ghTokenType = 'OAuth' }
+    elseif ($ghToken -match '^ghu_')     { $ghTokenType = 'User-to-server' }
+    elseif ($ghToken -match '^ghs_')     { $ghTokenType = 'Server-to-server' }
+
     try {
         $ghHeaders = @{
             Authorization = "token $ghToken"
@@ -415,15 +455,84 @@ if ($ghToken) {
         }
         $ghResponse = Invoke-WebRequest -Uri 'https://api.github.com/user' -Headers $ghHeaders -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop
         $ghUser = ($ghResponse.Content | ConvertFrom-Json).login
+        Write-Check 'GitHub User' "$ghUser ($ghTokenType)" $true
+
+        # Rate limit info
+        $rateRemain = $ghResponse.Headers['X-RateLimit-Remaining']
+        $rateLimit  = $ghResponse.Headers['X-RateLimit-Limit']
+        if ($rateRemain -is [array]) { $rateRemain = $rateRemain[0] }
+        if ($rateLimit -is [array])  { $rateLimit  = $rateLimit[0] }
+        if ($rateRemain -and $rateLimit) {
+            $rateOk = [int]$rateRemain -gt 100
+            Write-Check 'Rate Limit' "$rateRemain/$rateLimit remaining" $rateOk
+            if (-not $rateOk) { Write-Warn '  Rate limit is low. Consider waiting or using a different token.' }
+        }
+
+        # Scope checks (classic PATs return X-OAuth-Scopes; fine-grained PATs don't)
         $scopeHeader = $ghResponse.Headers['X-OAuth-Scopes']
         if ($scopeHeader -is [array]) { $scopes = $scopeHeader[0] } else { $scopes = [string]$scopeHeader }
-        $hasRepoScope = $scopes -match '\brepo\b'
-        if ($hasRepoScope) {
-            Write-Check 'GitHub Token' "$ghUser (repo scope $([char]0x2714))" $true
+
+        if ($scopes) {
+            # Classic PAT — check individual scopes
+            $scopeList = ($scopes -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+            $hasRepo     = $scopeList -contains 'repo'
+            $hasWorkflow = $scopeList -contains 'workflow'
+
+            if ($hasRepo) {
+                Write-Check 'Scope: repo' 'granted (clone, push, PRs)' $true
+            } else {
+                Write-Check 'Scope: repo' 'MISSING' $false
+                Write-Warn '  Required for private repos, pushing, and creating PRs.'
+            }
+
+            if ($hasWorkflow) {
+                Write-Check 'Scope: workflow' 'granted' $true
+            } else {
+                Write-Check 'Scope: workflow' 'not set (optional)' $true
+                Write-Info '  Needed only if the agent modifies .github/workflows/ files.'
+            }
+
+            # Show all scopes for transparency
+            if (-not $hasRepo) {
+                Write-Warn "  Current scopes: $scopes"
+            }
         } else {
-            Write-Check 'GitHub Token' "$ghUser (missing 'repo' scope)" $false
-            Write-Warn "  Current scopes: $scopes"
-            Write-Warn "  Private repos and push may not work without 'repo' scope."
+            # Fine-grained PAT or no scopes returned
+            Write-Check 'Scopes' 'n/a (fine-grained PAT)' $true
+            Write-Info '  Fine-grained PATs use repository permissions instead of scopes.'
+            Write-Info '  Ensure this token has Contents (read/write) and Pull Requests (read/write).'
+        }
+
+        # Check if token can access the specific repo
+        $repoPath = $RepoUrl -replace '\.git$', '' -replace '^https?://github\.com/', '' -replace '^git@github\.com:', ''
+        if ($repoPath -and $repoPath -match '^[^/]+/[^/]+$') {
+            try {
+                $repoInfo = Invoke-RestMethod -Uri "https://api.github.com/repos/$repoPath" -Headers $ghHeaders -TimeoutSec 10 -ErrorAction Stop
+                $repoPerms = @()
+                if ($repoInfo.permissions.push)  { $repoPerms += 'push' }
+                if ($repoInfo.permissions.pull)  { $repoPerms += 'pull' }
+                if ($repoInfo.permissions.admin) { $repoPerms += 'admin' }
+                $permStr = $repoPerms -join ', '
+                $canPush = [bool]$repoInfo.permissions.push
+                Write-Check 'Repo Perms' "$repoPath ($permStr)" $canPush
+                if (-not $canPush) {
+                    Write-Warn '  Token can read the repo but cannot push. Agent needs push access.'
+                }
+            } catch {
+                $repoStatus = $null
+                if ($_.Exception.Response) {
+                    try { $repoStatus = [int]$_.Exception.Response.StatusCode } catch {}
+                }
+                if ($repoStatus -eq 404) {
+                    Write-Check 'Repo Access' "$repoPath (not found or no access)" $false
+                    Write-Warn '  Token cannot see this repo. Check repo name and token permissions.'
+                } elseif ($repoStatus -eq 403) {
+                    Write-Check 'Repo Access' "$repoPath (forbidden)" $false
+                    Write-Warn '  Token is valid but not authorized for this repository.'
+                } else {
+                    Write-Check 'Repo Access' "$repoPath (could not check)" $false
+                }
+            }
         }
     } catch {
         $ghStatus = $null

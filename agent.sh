@@ -96,6 +96,41 @@ if command -v curl >/dev/null 2>&1; then
   if [[ "$DISCORD_HTTP" == "200" ]]; then
     DISCORD_USER=$(grep -o '"username":"[^"]*"' /tmp/.discord_check | head -1 | cut -d'"' -f4)
     ok "Discord bot: $DISCORD_USER"
+
+    # Check Message Content Intent via /applications/@me
+    APP_HTTP=$(curl -s -o /tmp/.discord_app -w "%{http_code}" \
+      -H "Authorization: Bot $DISCORD_TOKEN" \
+      "https://discord.com/api/v10/applications/@me" --max-time 10 2>/dev/null)
+    if [[ "$APP_HTTP" == "200" ]]; then
+      APP_FLAGS=$(grep -o '"flags":[0-9]*' /tmp/.discord_app | head -1 | grep -o '[0-9]*$')
+      if [[ -n "$APP_FLAGS" ]]; then
+        # GatewayMessageContent = 1<<18 (262144), Limited = 1<<19 (524288)
+        HAS_MSG_CONTENT=$(( (APP_FLAGS & 262144) | (APP_FLAGS & 524288) ))
+        if [[ "$HAS_MSG_CONTENT" -ne 0 ]]; then
+          ok "Message Content Intent: enabled"
+        else
+          warn "Message Content Intent: NOT enabled"
+          warn "  Enable it: Discord Developer Portal > Bot > Privileged Gateway Intents"
+        fi
+      fi
+    fi
+    rm -f /tmp/.discord_app
+
+    # Check if bot is in any guilds
+    GUILDS_HTTP=$(curl -s -o /tmp/.discord_guilds -w "%{http_code}" \
+      -H "Authorization: Bot $DISCORD_TOKEN" \
+      "https://discord.com/api/v10/users/@me/guilds?limit=1" --max-time 10 2>/dev/null)
+    if [[ "$GUILDS_HTTP" == "200" ]]; then
+      GUILD_COUNT=$(grep -o '"id"' /tmp/.discord_guilds | wc -l)
+      if [[ "$GUILD_COUNT" -gt 0 ]]; then
+        ok "Bot guilds: in at least 1 server"
+      else
+        warn "Bot is not in any server yet"
+        warn "  Invite the bot: Developer Portal > OAuth2 > URL Generator"
+      fi
+    fi
+    rm -f /tmp/.discord_guilds
+
   elif [[ "$DISCORD_HTTP" == "401" ]]; then
     VALIDATION_FAILED=true
     echo -e "${RED}[FAIL]${NC} Discord token invalid (401 Unauthorized)"
@@ -111,26 +146,95 @@ fi
 # GitHub token validation (if set)
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then
   if command -v curl >/dev/null 2>&1; then
-    GH_HEADERS=$(curl -s -D - -o /tmp/.gh_check \
+    # Detect token type
+    GH_TOKEN_TYPE="unknown"
+    case "$GITHUB_TOKEN" in
+      ghp_*)         GH_TOKEN_TYPE="PAT (classic)" ;;
+      github_pat_*)  GH_TOKEN_TYPE="PAT (fine-grained)" ;;
+      gho_*)         GH_TOKEN_TYPE="OAuth" ;;
+      ghu_*)         GH_TOKEN_TYPE="User-to-server" ;;
+      ghs_*)         GH_TOKEN_TYPE="Server-to-server" ;;
+    esac
+
+    GH_HEADERS_FILE=$(mktemp)
+    GH_BODY_FILE=$(mktemp)
+    GH_HTTP=$(curl -s -D "$GH_HEADERS_FILE" -o "$GH_BODY_FILE" -w "%{http_code}" \
       -H "Authorization: token $GITHUB_TOKEN" \
       -H "User-Agent: discord-copilot-agent/1.0" \
       "https://api.github.com/user" --max-time 10 2>/dev/null)
-    GH_HTTP=$(echo "$GH_HEADERS" | head -1 | grep -o '[0-9]\{3\}')
+
     if [[ "$GH_HTTP" == "200" ]]; then
-      GH_USER=$(grep -o '"login":"[^"]*"' /tmp/.gh_check | head -1 | cut -d'"' -f4)
-      GH_SCOPES=$(echo "$GH_HEADERS" | grep -i '^x-oauth-scopes:' | cut -d: -f2- | xargs)
-      if echo "$GH_SCOPES" | grep -qw "repo"; then
-        ok "GitHub token: $GH_USER (repo scope OK)"
-      else
-        warn "GitHub token: $GH_USER (missing 'repo' scope, current: $GH_SCOPES)"
-        warn "  Private repos and push may not work without 'repo' scope."
+      GH_USER=$(grep -o '"login":"[^"]*"' "$GH_BODY_FILE" | head -1 | cut -d'"' -f4)
+      ok "GitHub user: $GH_USER ($GH_TOKEN_TYPE)"
+
+      # Rate limit
+      RATE_REMAIN=$(grep -i '^x-ratelimit-remaining:' "$GH_HEADERS_FILE" | tr -d '\r' | awk '{print $2}')
+      RATE_LIMIT=$(grep -i '^x-ratelimit-limit:' "$GH_HEADERS_FILE" | tr -d '\r' | awk '{print $2}')
+      if [[ -n "$RATE_REMAIN" && -n "$RATE_LIMIT" ]]; then
+        if [[ "$RATE_REMAIN" -gt 100 ]]; then
+          ok "Rate limit: $RATE_REMAIN/$RATE_LIMIT remaining"
+        else
+          warn "Rate limit low: $RATE_REMAIN/$RATE_LIMIT remaining"
+        fi
       fi
+
+      # Scope checks
+      GH_SCOPES=$(grep -i '^x-oauth-scopes:' "$GH_HEADERS_FILE" | cut -d: -f2- | tr -d '\r' | xargs)
+
+      if [[ -n "$GH_SCOPES" ]]; then
+        # Classic PAT
+        if echo "$GH_SCOPES" | grep -qw "repo"; then
+          ok "Scope: repo (clone, push, PRs)"
+        else
+          warn "Scope: repo MISSING — needed for private repos, push, PRs"
+          warn "  Current scopes: $GH_SCOPES"
+        fi
+
+        if echo "$GH_SCOPES" | grep -qw "workflow"; then
+          ok "Scope: workflow (CI files)"
+        else
+          info "Scope: workflow not set (optional, for .github/workflows/)"
+        fi
+      else
+        info "Scopes: n/a (fine-grained PAT)"
+        info "  Ensure token has Contents (read/write) and Pull Requests (read/write)."
+      fi
+
+      # Check access to the specific repo
+      REPO_PATH=$(echo "$REPO_URL" | sed 's/\.git$//' | sed 's|^https\?://github\.com/||' | sed 's|^git@github\.com:||')
+      if [[ "$REPO_PATH" =~ ^[^/]+/[^/]+$ ]]; then
+        REPO_HTTP=$(curl -s -o /tmp/.gh_repo -w "%{http_code}" \
+          -H "Authorization: token $GITHUB_TOKEN" \
+          -H "User-Agent: discord-copilot-agent/1.0" \
+          "https://api.github.com/repos/$REPO_PATH" --max-time 10 2>/dev/null)
+        if [[ "$REPO_HTTP" == "200" ]]; then
+          CAN_PUSH=$(grep -o '"push":[a-z]*' /tmp/.gh_repo | head -1 | grep -o 'true\|false')
+          CAN_PULL=$(grep -o '"pull":[a-z]*' /tmp/.gh_repo | head -1 | grep -o 'true\|false')
+          PERMS=""
+          [[ "$CAN_PULL" == "true" ]] && PERMS="pull"
+          [[ "$CAN_PUSH" == "true" ]] && PERMS="${PERMS:+$PERMS, }push"
+          if [[ "$CAN_PUSH" == "true" ]]; then
+            ok "Repo perms: $REPO_PATH ($PERMS)"
+          else
+            warn "Repo perms: $REPO_PATH ($PERMS) — no push access"
+            warn "  Agent needs push access to create branches and PRs."
+          fi
+        elif [[ "$REPO_HTTP" == "404" ]]; then
+          warn "Repo access: $REPO_PATH (not found or no access)"
+        elif [[ "$REPO_HTTP" == "403" ]]; then
+          warn "Repo access: $REPO_PATH (forbidden)"
+        else
+          warn "Repo access: $REPO_PATH (HTTP $REPO_HTTP)"
+        fi
+        rm -f /tmp/.gh_repo
+      fi
+
     elif [[ "$GH_HTTP" == "401" ]]; then
       warn "GitHub token invalid (401). Create a new one: https://github.com/settings/tokens"
     else
       warn "GitHub API returned HTTP $GH_HTTP. Continuing..."
     fi
-    rm -f /tmp/.gh_check
+    rm -f "$GH_HEADERS_FILE" "$GH_BODY_FILE"
   fi
 else
   info "GITHUB_TOKEN not set (optional)"
