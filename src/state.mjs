@@ -19,6 +19,7 @@ db.exec(`
     workspace_path TEXT NOT NULL,
     branch         TEXT NOT NULL,
     status         TEXT NOT NULL DEFAULT 'idle',
+    model          TEXT,
     created_at     TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -56,15 +57,28 @@ db.exec(`
     ON responders(channel_id);
 `);
 
+// ── Migrations ──────────────────────────────────────────────────────────────
+
+function runMigrations() {
+  // Add model column if missing (v3 migration)
+  const cols = db.pragma("table_info(sessions)").map((c) => c.name);
+  if (!cols.includes("model")) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`);
+  }
+}
+
+runMigrations();
+
 // ── Sessions ────────────────────────────────────────────────────────────────
 const stmtUpsertSession = db.prepare(`
-  INSERT INTO sessions (channel_id, project_name, workspace_path, branch, status)
-  VALUES (@channelId, @projectName, @workspacePath, @branch, @status)
+  INSERT INTO sessions (channel_id, project_name, workspace_path, branch, status, model)
+  VALUES (@channelId, @projectName, @workspacePath, @branch, @status, @model)
   ON CONFLICT(channel_id) DO UPDATE SET
     project_name   = excluded.project_name,
     workspace_path = excluded.workspace_path,
     branch         = excluded.branch,
-    status         = excluded.status
+    status         = excluded.status,
+    model          = excluded.model
 `);
 
 const stmtGetSession = db.prepare(
@@ -77,12 +91,16 @@ const stmtUpdateSessionStatus = db.prepare(
   `UPDATE sessions SET status = ? WHERE channel_id = ?`
 );
 
+const stmtUpdateSessionModel = db.prepare(
+  `UPDATE sessions SET model = ? WHERE channel_id = ?`
+);
+
 const stmtDeleteSession = db.prepare(
   `DELETE FROM sessions WHERE channel_id = ?`
 );
 
-export function upsertSession(channelId, projectName, workspacePath, branch, status = "idle") {
-  stmtUpsertSession.run({ channelId, projectName, workspacePath, branch, status });
+export function upsertSession(channelId, projectName, workspacePath, branch, status = "idle", model = null) {
+  stmtUpsertSession.run({ channelId, projectName, workspacePath, branch, status, model });
 }
 
 export function getSession(channelId) {
@@ -95,6 +113,10 @@ export function getAllSessions() {
 
 export function updateSessionStatus(channelId, status) {
   stmtUpdateSessionStatus.run(status, channelId);
+}
+
+export function updateSessionModel(channelId, model) {
+  stmtUpdateSessionModel.run(model, channelId);
 }
 
 export function deleteSession(channelId) {

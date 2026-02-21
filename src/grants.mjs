@@ -77,6 +77,12 @@ export function addGrant(channelId, grantPath, mode, ttlMinutes) {
 // ── Revoke Grant ────────────────────────────────────────────────────────────
 
 export function revokeGrant(channelId, grantPath) {
+  // Normalize path the same way addGrant does so lookups match
+  try {
+    grantPath = realpathSync(resolve(grantPath));
+  } catch {
+    grantPath = resolve(grantPath);
+  }
   const grants = channelGrants(channelId);
   const existing = grants.get(grantPath);
   if (existing?.timer) clearTimeout(existing.timer);

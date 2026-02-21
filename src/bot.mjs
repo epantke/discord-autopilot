@@ -1,5 +1,8 @@
 import {
   ActivityType,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   Client,
   Events,
   GatewayIntentBits,
@@ -31,6 +34,7 @@ import {
   RATE_LIMIT_MAX,
   STARTUP_CHANNEL_ID,
   ADMIN_USER_ID,
+  DEFAULT_MODEL,
 } from "./config.mjs";
 
 import {
@@ -49,6 +53,8 @@ import {
   removeChannelResponder,
   getChannelResponders,
   updateBranch,
+  changeModel,
+  listAvailableModels,
 } from "./session-manager.mjs";
 
 import { addGrant, revokeGrant, startGrantCleanup, restoreGrants } from "./grants.mjs";
@@ -63,6 +69,7 @@ import {
 } from "./state.mjs";
 import { stopCopilotClient } from "./copilot-client.mjs";
 import { redactSecrets } from "./secret-scanner.mjs";
+import { checkForUpdate, downloadAndApplyUpdate, restartBot } from "./updater.mjs";
 import { createLogger } from "./logger.mjs";
 import { execSync, execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -213,6 +220,20 @@ const commands = [
     .setDescription("Show bot statistics and uptime"),
 
   new SlashCommandBuilder()
+    .setName("update")
+    .setDescription("Check for and apply bot updates")
+    .addStringOption((opt) =>
+      opt
+        .setName("action")
+        .setDescription("What to do")
+        .addChoices(
+          { name: "Check for updates", value: "check" },
+          { name: "Apply update now", value: "apply" }
+        )
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
     .setName("responders")
     .setDescription("Manage who can answer agent questions")
     .addStringOption((opt) =>
@@ -230,6 +251,23 @@ const commands = [
       opt.setName("user").setDescription("User to add/remove")
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
+    .setName("model")
+    .setDescription("View or change the AI model for this channel")
+    .addStringOption((opt) =>
+      opt
+        .setName("action")
+        .setDescription("What to do")
+        .addChoices(
+          { name: "Show current model", value: "current" },
+          { name: "List available models", value: "list" },
+          { name: "Set model", value: "set" }
+        )
+    )
+    .addStringOption((opt) =>
+      opt.setName("name").setDescription("Model ID to switch to (for set)").setAutocomplete(true)
+    ),
 ];
 
 // ── Access Control ──────────────────────────────────────────────────────────
@@ -245,10 +283,7 @@ function isAllowed(interaction) {
   if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(interaction.guildId)) return false;
   if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(interaction.channelId)) return false;
   if (ADMIN_ROLE_IDS) {
-    const memberRoles = interaction.member?.roles?.cache;
-    if (!memberRoles) return false;
-    const hasRole = [...ADMIN_ROLE_IDS].some((id) => memberRoles.has(id));
-    if (!hasRole) return false;
+    if (!hasAnyRole(interaction.member, ADMIN_ROLE_IDS)) return false;
   }
   return true;
 }
@@ -259,8 +294,21 @@ function isAdmin(interaction) {
     return ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID;
   }
   if (!ADMIN_ROLE_IDS) return true;
-  const memberRoles = interaction.member?.roles?.cache;
-  return memberRoles ? [...ADMIN_ROLE_IDS].some((id) => memberRoles.has(id)) : false;
+  return hasAnyRole(interaction.member, ADMIN_ROLE_IDS);
+}
+
+/**
+ * Safely check if a member has any of the given role IDs.
+ * Handles both GuildMemberRoleManager (.cache Collection) and plain string[] (API interactions).
+ */
+function hasAnyRole(member, roleIds) {
+  const roles = member?.roles;
+  if (!roles) return false;
+  // GuildMemberRoleManager with .cache (Collection with .has)
+  if (roles.cache) return [...roleIds].some((id) => roles.cache.has(id));
+  // Plain array of role ID strings (API interaction)
+  if (Array.isArray(roles)) return [...roleIds].some((id) => roles.includes(id));
+  return false;
 }
 
 // ── Rate Limiting ───────────────────────────────────────────────────────────
@@ -283,7 +331,6 @@ function isRateLimited(interaction) {
   // Remove entries outside the window
   const cutoff = now - RATE_LIMIT_WINDOW_MS;
   while (timestamps.length > 0 && timestamps[0] <= cutoff) timestamps.shift();
-  if (timestamps.length === 0) { rateLimitMap.delete(userId); }
   if (timestamps.length >= RATE_LIMIT_MAX) return true;
   timestamps.push(now);
   return false;
@@ -302,7 +349,6 @@ function isDmRateLimited(userId) {
   }
   const cutoff = now - RATE_LIMIT_WINDOW_MS;
   while (timestamps.length > 0 && timestamps[0] <= cutoff) timestamps.shift();
-  if (timestamps.length === 0) { rateLimitMap.delete(userId); }
   if (timestamps.length >= RATE_LIMIT_MAX) return true;
   timestamps.push(now);
   return false;
@@ -380,9 +426,11 @@ client.once(Events.ClientReady, async () => {
 
   // ── Bot Presence ────────────────────────────────────────────────────────
   client.user.setPresence({
-    activities: [{ name: "/task", type: ActivityType.Listening }],
+    activities: [{ name: `v${CURRENT_VERSION} · /task`, type: ActivityType.Watching }],
     status: "online",
   });
+
+  startUpdateChecker();
 });
 
 /** Build the startup embed once and reuse for channel + DM. */
@@ -402,7 +450,7 @@ function buildStartupEmbed({ envIssues, recoveryInfo } = {}) {
   const embed = new EmbedBuilder()
     .setTitle(title)
     .setColor(color)
-    .setDescription(`**${client.user.tag}** · ${PROJECT_NAME} · ${commands.length} cmds`);
+    .setDescription(`**${client.user.tag}** · ${PROJECT_NAME} · ${commands.length} cmds · v${CURRENT_VERSION}`);
 
   if (hasErrors) {
     embed.addFields({
@@ -631,13 +679,108 @@ async function sendStartupNotification({ envIssues, recoveryInfo } = {}) {
   }
 }
 
+// ── Periodic Update Checker ─────────────────────────────────────────────────
+
+let _lastNotifiedVersion = null;
+
+async function sendUpdateBanner(updateInfo) {
+  if (_lastNotifiedVersion === updateInfo.latestVersion) return;
+  _lastNotifiedVersion = updateInfo.latestVersion;
+
+  const embed = new EmbedBuilder()
+    .setTitle("🚀 Update Available!")
+    .setColor(0xFFAA00)
+    .setDescription(
+      `A new version of **Discord Autopilot** is ready!\n\n` +
+      `\`v${updateInfo.currentVersion}\` → \`v${updateInfo.latestVersion}\``
+    )
+    .setTimestamp();
+
+  if (updateInfo.releaseNotes) {
+    const notes = updateInfo.releaseNotes.length > 500
+      ? updateInfo.releaseNotes.slice(0, 497) + "…"
+      : updateInfo.releaseNotes;
+    embed.addFields({ name: "📋 What's New", value: notes, inline: false });
+  }
+
+  embed.addFields({
+    name: "💡 How to Update",
+    value: "Use `/update apply` in Discord, or run `--update` / `-Update` from the command line.",
+    inline: false,
+  });
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setLabel("View Release")
+      .setStyle(ButtonStyle.Link)
+      .setURL(updateInfo.releaseUrl),
+  );
+
+  const payload = { embeds: [embed], components: [row] };
+
+  if (ADMIN_USER_ID) {
+    try {
+      const user = await client.users.fetch(ADMIN_USER_ID);
+      await user.send(payload);
+      log.info("Update notification sent to admin", { version: updateInfo.latestVersion });
+    } catch (err) {
+      log.warn("Failed to send update notification DM", { error: err.message });
+    }
+  }
+
+  if (STARTUP_CHANNEL_ID) {
+    try {
+      const ch = await client.channels.fetch(STARTUP_CHANNEL_ID);
+      if (ch?.isTextBased()) await ch.send(payload);
+    } catch (err) {
+      log.warn("Failed to send update notification to channel", { error: err.message });
+    }
+  }
+}
+
+function startUpdateChecker() {
+  const initialTimer = setTimeout(async () => {
+    try {
+      const result = await checkForUpdate();
+      if (result.available) await sendUpdateBanner(result);
+    } catch (err) {
+      log.warn("Initial update check failed", { error: err.message });
+    }
+  }, 30_000);
+  initialTimer.unref();
+
+  const interval = setInterval(async () => {
+    try {
+      const result = await checkForUpdate();
+      if (result.available) await sendUpdateBanner(result);
+    } catch (err) {
+      log.warn("Periodic update check failed", { error: err.message });
+    }
+  }, UPDATE_CHECK_INTERVAL_MS);
+  interval.unref();
+}
+
 // ── Interaction Handler ─────────────────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
   // Branch name autocomplete
   if (interaction.isAutocomplete()) {
-    if (interaction.commandName !== "branch") return;
     const focused = interaction.options.getFocused();
+
+    if (interaction.commandName === "model") {
+      try {
+        const models = await listAvailableModels();
+        const filtered = models
+          .filter((m) => m.id.toLowerCase().includes(focused.toLowerCase()) || m.name.toLowerCase().includes(focused.toLowerCase()))
+          .slice(0, 25);
+        await interaction.respond(filtered.map((m) => ({ name: `${m.name} (${m.id})`, value: m.id })));
+      } catch {
+        await interaction.respond([]).catch(() => {});
+      }
+      return;
+    }
+
+    if (interaction.commandName !== "branch") return;
     const channelId = interaction.channelId;
     const status = getSessionStatus(channelId);
     if (!status) return interaction.respond([]).catch(() => {});
@@ -734,6 +877,7 @@ client.on("interactionCreate", async (interaction) => {
         const fields = [
           { name: "Status", value: status.paused ? `${status.status} (⏸ paused)` : status.status, inline: true },
           { name: "Branch", value: status.branch, inline: true },
+          { name: "Model", value: status.model || "*(default)*", inline: true },
           { name: "Queue", value: `${status.queueLength} pending`, inline: true },
         ];
         if (status.currentPrompt) {
@@ -964,6 +1108,7 @@ client.on("interactionCreate", async (interaction) => {
             { name: "Repo Path", value: `\`${REPO_PATH}\``, inline: true },
             { name: "Base Root", value: `\`${BASE_ROOT}\``, inline: false },
             { name: "Workspaces Root", value: `\`${WORKSPACES_ROOT}\``, inline: false },
+            { name: "Default Model", value: DEFAULT_MODEL || "*(SDK default)*", inline: true },
             { name: "Edit Throttle", value: `${DISCORD_EDIT_THROTTLE_MS} ms`, inline: true },
             { name: "Default Grant Mode", value: DEFAULT_GRANT_MODE, inline: true },
             { name: "Default Grant TTL", value: `${DEFAULT_GRANT_TTL_MIN} min`, inline: true },
@@ -1144,7 +1289,7 @@ client.on("interactionCreate", async (interaction) => {
               .map((c) => `**/${c.name}** — ${c.description}`)
               .join("\n")
           )
-          .setFooter({ text: `${commands.length} commands available` })
+          .setFooter({ text: `${commands.length} commands available · v${CURRENT_VERSION}` })
           .setTimestamp();
         await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
         break;
@@ -1167,6 +1312,7 @@ client.on("interactionCreate", async (interaction) => {
           .setTitle("📈 Bot Statistics")
           .setColor(0x2ecc71)
           .addFields(
+            { name: "Version", value: `v${CURRENT_VERSION}`, inline: true },
             { name: "Uptime", value: uptimeStr, inline: true },
             { name: "Active Sessions", value: String(getActiveSessionCount()), inline: true },
             { name: "Tasks Total", value: String(stats.total), inline: true },
@@ -1215,6 +1361,229 @@ client.on("interactionCreate", async (interaction) => {
         } else if (action === "remove") {
           removeChannelResponder(channelId, user.id);
           await interaction.reply(`🔒 <@${user.id}> removed as responder.`);
+        }
+        break;
+      }
+
+      // ── /model ─────────────────────────────────────────────────────────
+      case "model": {
+        const action = interaction.options.getString("action") || "current";
+        const modelName = interaction.options.getString("name");
+
+        if (action === "list") {
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          try {
+            const models = await listAvailableModels();
+            if (!models || models.length === 0) {
+              await interaction.editReply("No models available.");
+              break;
+            }
+            const lines = models.map((m) => {
+              const effort = m.supportedReasoningEfforts?.length
+                ? ` · reasoning: ${m.supportedReasoningEfforts.join(", ")}`
+                : "";
+              const policy = m.policy?.state === "disabled" ? " ⛔" : "";
+              return `**${m.name}** — \`${m.id}\`${effort}${policy}`;
+            });
+            let description = lines.join("\n");
+            if (description.length > 4000) {
+              description = description.slice(0, 4000) + "\n…(truncated)";
+            }
+            const embed = new EmbedBuilder()
+              .setTitle("🤖 Available Models")
+              .setColor(0x3498db)
+              .setDescription(description)
+              .setTimestamp();
+            await interaction.editReply({ embeds: [embed] });
+          } catch (err) {
+            await interaction.editReply(`❌ Failed to list models: ${redactSecrets(err.message).clean}`);
+          }
+          break;
+        }
+
+        if (action === "current") {
+          const status = getSessionStatus(channelId);
+          const current = status?.model || DEFAULT_MODEL || "*(SDK default)*";
+          await interaction.reply({
+            content: `Current model: \`${current}\``,
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+
+        if (action === "set") {
+          if (!modelName) {
+            await interaction.reply({
+              content: "⚠️ Please provide a model ID (`name` option). Use `/model action:list` to see available models.",
+              flags: MessageFlags.Ephemeral,
+            });
+            break;
+          }
+
+          await interaction.deferReply();
+          const result = await changeModel(channelId, channel, modelName);
+          if (result.ok) {
+            await interaction.editReply(`✅ Model switched to \`${modelName}\`.`);
+          } else {
+            await interaction.editReply(`❌ ${result.error}`);
+          }
+          break;
+        }
+        break;
+      }
+
+      // ── /update ───────────────────────────────────────────────────────
+      case "update": {
+        const action = interaction.options.getString("action") || "check";
+
+        if (action === "check") {
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          const result = await checkForUpdate({ force: true });
+
+          if (result.error) {
+            const embed = new EmbedBuilder()
+              .setTitle("❌ Update Check Failed")
+              .setColor(0xe74c3c)
+              .setDescription(`Could not check for updates: ${result.error}`)
+              .setTimestamp();
+            await interaction.editReply({ embeds: [embed] });
+            break;
+          }
+
+          if (result.available) {
+            const embed = new EmbedBuilder()
+              .setTitle("🚀 Update Available!")
+              .setColor(0xFFAA00)
+              .setDescription(
+                `A new version is ready!\n\n` +
+                `\`v${result.currentVersion}\` → \`v${result.latestVersion}\``
+              )
+              .setTimestamp();
+
+            if (result.releaseNotes) {
+              const notes = result.releaseNotes.length > 800
+                ? result.releaseNotes.slice(0, 797) + "…"
+                : result.releaseNotes;
+              embed.addFields({ name: "📋 What's New", value: notes, inline: false });
+            }
+
+            embed.addFields({
+              name: "💡 How to Update",
+              value: "Run `/update apply` to update and restart the bot.",
+              inline: false,
+            });
+
+            const row = new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setLabel("View Release")
+                .setStyle(ButtonStyle.Link)
+                .setURL(result.releaseUrl),
+            );
+
+            await interaction.editReply({ embeds: [embed], components: [row] });
+          } else {
+            const embed = new EmbedBuilder()
+              .setTitle("✅ Up to Date")
+              .setColor(0x2ecc71)
+              .setDescription(`You're running the latest version: **v${result.currentVersion}**`)
+              .setTimestamp();
+            await interaction.editReply({ embeds: [embed] });
+          }
+          break;
+        }
+
+        if (action === "apply") {
+          await interaction.deferReply();
+          const check = await checkForUpdate({ force: true });
+
+          if (!check.available) {
+            const embed = new EmbedBuilder()
+              .setTitle("✅ Already Up to Date")
+              .setColor(0x2ecc71)
+              .setDescription(`Running version **v${check.currentVersion || CURRENT_VERSION}** — no update needed.`)
+              .setTimestamp();
+            await interaction.editReply({ embeds: [embed] });
+            break;
+          }
+
+          const confirmEmbed = new EmbedBuilder()
+            .setTitle("🔄 Confirm Update")
+            .setColor(0xFFAA00)
+            .setDescription(
+              `Update from **v${check.currentVersion}** to **v${check.latestVersion}**?\n\n` +
+              `⚠️ The bot will restart after the update is applied.`
+            )
+            .setTimestamp();
+
+          const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId("update_confirm")
+              .setLabel("✅ Update Now")
+              .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+              .setCustomId("update_cancel")
+              .setLabel("Cancel")
+              .setStyle(ButtonStyle.Secondary),
+          );
+
+          const msg = await interaction.editReply({ embeds: [confirmEmbed], components: [row] });
+
+          try {
+            const btn = await msg.awaitMessageComponent({
+              filter: (i) => i.user.id === interaction.user.id,
+              time: 120_000,
+            });
+
+            if (btn.customId === "update_cancel") {
+              await btn.update({
+                embeds: [new EmbedBuilder().setTitle("❌ Update Cancelled").setColor(0x95a5a6).setTimestamp()],
+                components: [],
+              });
+              break;
+            }
+
+            await btn.update({
+              embeds: [new EmbedBuilder()
+                .setTitle("⏳ Downloading Update...")
+                .setColor(0x3498db)
+                .setDescription(`Downloading v${check.latestVersion}…`)
+                .setTimestamp()],
+              components: [],
+            });
+
+            const result = await downloadAndApplyUpdate();
+
+            if (result.success) {
+              await interaction.editReply({
+                embeds: [new EmbedBuilder()
+                  .setTitle("✅ Update Applied!")
+                  .setColor(0x2ecc71)
+                  .setDescription(
+                    `Updated to **v${result.version}**\n\n` +
+                    `🔄 **The bot will restart now.** It should be back online in a few seconds.\n\n` +
+                    `💾 Backup saved to \`${result.backupPath}\``
+                  )
+                  .setTimestamp()],
+                components: [],
+              });
+              setTimeout(() => restartBot(), 2_000);
+            } else {
+              await interaction.editReply({
+                embeds: [new EmbedBuilder()
+                  .setTitle("❌ Update Failed")
+                  .setColor(0xe74c3c)
+                  .setDescription(`**Reason:** ${result.reason}\n\nThe bot continues running on the current version.`)
+                  .setTimestamp()],
+                components: [],
+              });
+            }
+          } catch {
+            await interaction.editReply({
+              embeds: [new EmbedBuilder().setTitle("⏰ Update Timed Out").setColor(0x95a5a6).setDescription("No response received. Update cancelled.").setTimestamp()],
+              components: [],
+            }).catch(() => {});
+          }
+          break;
         }
         break;
       }
@@ -1283,10 +1652,7 @@ client.on("messageCreate", async (message) => {
   if (isAwaitingQuestion(parentId)) return;
 
   if (ADMIN_ROLE_IDS) {
-    const memberRoles = message.member?.roles?.cache;
-    if (!memberRoles || ![...ADMIN_ROLE_IDS].some((id) => memberRoles.has(id))) {
-      return;
-    }
+    if (!hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
   }
 
   const prompt = message.content.trim();

@@ -93,6 +93,7 @@ REPO_URL=https://github.com/user/repo.git
 | `/status` | Session status, queue & active grants |
 | `/diff [stat\|full\|staged]` | Show git diff in workspace |
 | `/branch [list\|current\|create\|switch]` | Manage agent branches |
+| `/model [current\|list\|set]` | View or change the AI model |
 | `/grant path mode:[ro\|rw] ttl:<min>` | Grant access outside workspace |
 | `/revoke path` | Revoke a path grant |
 | `/approve_push` | Approve a pending git push |
@@ -134,6 +135,7 @@ src/
 | `DISCORD_TOKEN` | **required** | Discord bot token |
 | `REPO_URL` | _(prompted)_ | Repository to clone |
 | `GITHUB_TOKEN` | _(none)_ | Fine-grained PAT — permissions: Contents (r/w), Pull requests (r/w) |
+| `DEFAULT_MODEL` | `claude-opus-4.6` | AI model ID (e.g. `claude-sonnet-4.6`, `gpt-4o`) |
 | `ALLOWED_GUILDS` | _(all)_ | Comma-separated guild IDs |
 | `ALLOWED_CHANNELS` | _(all)_ | Comma-separated channel IDs |
 | `ADMIN_ROLE_IDS` | _(all)_ | Comma-separated admin role IDs |

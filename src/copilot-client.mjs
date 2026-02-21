@@ -56,6 +56,7 @@ export function getCopilotClient() {
  * @param {function} opts.onToolComplete - Called when a tool finishes
  * @param {function} opts.onIdle - Called when agent finishes
  * @param {function} opts.onUserQuestion - Called when agent asks a question
+ * @param {string|null} [opts.model] - Model ID to use (null = SDK default)
  */
 export async function createAgentSession(opts) {
   const {
@@ -68,13 +69,19 @@ export async function createAgentSession(opts) {
     onToolComplete,
     onIdle,
     onUserQuestion,
+    model,
   } = opts;
 
   const copilot = getCopilotClient();
 
-  const session = await copilot.createSession({
+  const sessionConfig = {
     workingDirectory: workspacePath,
     streaming: true,
+    ...(model ? { model } : {}),
+  };
+
+  const session = await copilot.createSession({
+    ...sessionConfig,
 
     // Approve all native permission requests (our policy is in onPreToolUse)
     onPermissionRequest: approveAll,
@@ -196,6 +203,15 @@ export async function createAgentSession(opts) {
   }
 
   return session;
+}
+
+/**
+ * List available models from the Copilot API.
+ * @returns {Promise<Array<{id: string, name: string}>>}
+ */
+export async function listAvailableModels() {
+  const copilot = getCopilotClient();
+  return copilot.listModels();
 }
 
 /**

@@ -96,6 +96,7 @@ export class DiscordOutput {
         this.message = null;
         this.content = tail;
         this.dirty = tail.length > 0 || footer.length > 0;
+        if (this.dirty) this._scheduleEdit();
         return;
       }
 

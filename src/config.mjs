@@ -1,4 +1,6 @@
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { createLogger } from "./logger.mjs";
 
@@ -75,9 +77,27 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN || null;
 const STARTUP_CHANNEL_ID = validateSnowflake(process.env.STARTUP_CHANNEL_ID, "STARTUP_CHANNEL_ID");
 const ADMIN_USER_ID = validateSnowflake(process.env.ADMIN_USER_ID, "ADMIN_USER_ID");
 
+// ── Model ───────────────────────────────────────────────────────────────────
+const DEFAULT_MODEL = process.env.DEFAULT_MODEL || "claude-opus-4.6";
+
 // ── Limits ──────────────────────────────────────────────────────────────────
 const MAX_QUEUE_SIZE = safeInt(process.env.MAX_QUEUE_SIZE, 50);
 const MAX_PROMPT_LENGTH = safeInt(process.env.MAX_PROMPT_LENGTH, 4000);
+
+// ── Version ─────────────────────────────────────────────────────────────────
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const CURRENT_VERSION = (() => {
+  for (const rel of [join(__dirname, "..", "package.json"), join(__dirname, "package.json")]) {
+    try { return JSON.parse(readFileSync(rel, "utf-8")).version; } catch { /* next */ }
+  }
+  return "0.0.0";
+})();
+
+// ── Update Configuration ────────────────────────────────────────────────────
+const UPDATE_CHECK_INTERVAL_MS = safeInt(
+  process.env.UPDATE_CHECK_INTERVAL_MS, 3_600_000
+);
+const AGENT_SCRIPT_PATH = process.env.AGENT_SCRIPT_PATH || null;
 
 export {
   DISCORD_TOKEN,
@@ -99,6 +119,10 @@ export {
   RATE_LIMIT_MAX,
   STARTUP_CHANNEL_ID,
   ADMIN_USER_ID,
+  DEFAULT_MODEL,
   MAX_QUEUE_SIZE,
   MAX_PROMPT_LENGTH,
+  CURRENT_VERSION,
+  UPDATE_CHECK_INTERVAL_MS,
+  AGENT_SCRIPT_PATH,
 };

@@ -2,11 +2,12 @@ import { execFile } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS } from "./config.mjs";
+import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, DEFAULT_MODEL } from "./config.mjs";
 import {
   upsertSession,
   getSession,
   updateSessionStatus,
+  updateSessionModel,
   deleteSession as dbDeleteSession,
   insertTask,
   completeTask,
@@ -16,7 +17,7 @@ import {
   getResponders as dbGetResponders,
   pruneOldTasks,
 } from "./state.mjs";
-import { createAgentSession } from "./copilot-client.mjs";
+import { createAgentSession, listAvailableModels } from "./copilot-client.mjs";
 import {
   getActiveGrants,
   restoreGrants,
@@ -52,6 +53,7 @@ const responderStore = new Map();
  * @property {Array<{prompt:string, resolve:Function, reject:Function}>} queue
  * @property {DiscordOutput|null} output
  * @property {number|null} taskId
+ * @property {string|null} model
  * @property {boolean} paused
  * @property {boolean} _aborted
  */
@@ -119,15 +121,17 @@ export async function getOrCreateSession(channelId, channel) {
 
   // Check DB for existing session
   const dbRow = getSession(channelId);
-  let workspacePath, branch;
+  let workspacePath, branch, model;
 
   if (dbRow && existsSync(dbRow.workspace_path)) {
     workspacePath = dbRow.workspace_path;
     branch = dbRow.branch;
+    model = dbRow.model || DEFAULT_MODEL;
   } else {
     const wt = await createWorktree(channelId);
     workspacePath = wt.workspacePath;
     branch = wt.branch;
+    model = DEFAULT_MODEL;
   }
 
   // Create Copilot session with policy hooks — retry once on transient failure
@@ -137,13 +141,16 @@ export async function getOrCreateSession(channelId, channel) {
       copilotSession = await createAgentSession({
     channelId,
     workspacePath,
+    model,
 
     onPushRequest: async (command) => {
       return createPushApprovalRequest(channel, workspacePath, command);
     },
 
     onOutsideRequest: (reason) => {
-      channel
+      const ctx = sessions.get(channelId);
+      const target = ctx?.output?.channel || channel;
+      target
         .send(
           `⛔ **Access Denied**\n${reason}\n\n` +
             `Use \`/grant path:<absolute-path> mode:ro ttl:30\` to allow access.`
@@ -241,6 +248,7 @@ export async function getOrCreateSession(channelId, channel) {
     copilotSession,
     workspacePath,
     branch,
+    model,
     status: "idle",
     currentTask: null,
     queue: [],
@@ -257,8 +265,8 @@ export async function getOrCreateSession(channelId, channel) {
   sessions.set(channelId, ctx);
 
   // Persist to DB
-  upsertSession(channelId, PROJECT_NAME, workspacePath, branch, "idle");
-  log.info("Session created", { channelId, branch, workspace: workspacePath });
+  upsertSession(channelId, PROJECT_NAME, workspacePath, branch, "idle", model);
+  log.info("Session created", { channelId, branch, model, workspace: workspacePath });
 
   // Restore grants from DB
   restoreGrants(channelId);
@@ -350,10 +358,9 @@ async function processQueue(channelId, channel) {
       timeoutTimer = setTimeout(() => rej(new Error("Task timed out")), TASK_TIMEOUT_MS);
       timeoutTimer.unref();
     });
-    const response = await Promise.race([
-      ctx.copilotSession.sendAndWait({ prompt }),
-      timeout,
-    ]);
+    const taskPromise = ctx.copilotSession.sendAndWait({ prompt });
+    taskPromise.catch(() => {}); // prevent unhandled rejection if timeout wins
+    const response = await Promise.race([taskPromise, timeout]);
     clearTimeout(timeoutTimer);
     completeTask(ctx.taskId, "completed");
     log.info("Task completed", { channelId, taskId: ctx.taskId });
@@ -367,17 +374,16 @@ async function processQueue(channelId, channel) {
       ctx._aborted = false;
     } else if (err.message === "Task timed out") {
       log.warn("Task timed out", { channelId, taskId: ctx.taskId, timeoutMs: TASK_TIMEOUT_MS });
-      ctx._aborted = true;
       try { ctx.copilotSession.abort(); } catch {}
       completeTask(ctx.taskId, "aborted");
-      ctx.output?.finish(`⏱ **Task timed out** after ${Math.round(TASK_TIMEOUT_MS / 60_000)} min.`);
+      await ctx.output?.finish(`⏱ **Task timed out** after ${Math.round(TASK_TIMEOUT_MS / 60_000)} min.`);
       ctx.status = "idle";
       updateSessionStatus(channelId, "idle");
     } else {
       completeTask(ctx.taskId, "failed");
       ctx.status = "idle";
       updateSessionStatus(channelId, "idle");
-      ctx.output?.finish(`❌ **Error:** ${redactSecrets(err.message).clean}`);
+      await ctx.output?.finish(`❌ **Error:** ${redactSecrets(err.message).clean}`);
     }
     err._reportedByOutput = true;
     reject(err);
@@ -414,6 +420,7 @@ export function getSessionStatus(channelId) {
     paused: ctx.paused,
     workspace: ctx.workspacePath,
     branch: ctx.branch,
+    model: ctx.model || null,
     queueLength: ctx.queue.length,
     grants: grantList,
     currentPrompt: ctx.currentPrompt,
@@ -428,7 +435,11 @@ export async function resetSession(channelId) {
     try { ctx.copilotSession.abort(); } catch {}
     try { ctx.copilotSession.destroy(); } catch {}
     for (const item of ctx.queue) {
-      try { item.reject(new Error("Session reset")); } catch {}
+      try {
+        const err = new Error("Session reset");
+        err._reportedByOutput = true;
+        item.reject(err);
+      } catch {}
     }
   }
   sessions.delete(channelId);
@@ -456,7 +467,8 @@ export function hardStop(channelId, clearQueue = true) {
       ctx.taskId = null;
     }
     ctx.output?.finish("🛑 **Task aborted by user.**");
-    ctx.output = null;
+    // Don't null output synchronously — finish() is async and needs the reference
+    // It will be nulled by processQueue's finally block
     ctx.status = "idle";
     updateSessionStatus(channelId, "idle");
   }
@@ -464,7 +476,9 @@ export function hardStop(channelId, clearQueue = true) {
   if (clearQueue && ctx.queue.length > 0) {
     queueCleared = ctx.queue.length;
     for (const item of ctx.queue) {
-      item.reject(new Error("Cleared by /stop"));
+      const err = new Error("Cleared by /stop");
+      err._reportedByOutput = true;
+      item.reject(err);
     }
     ctx.queue = [];
   }
@@ -501,7 +515,9 @@ export function clearQueue(channelId) {
   if (!ctx) return { found: false, cleared: 0 };
   const cleared = ctx.queue.length;
   for (const item of ctx.queue) {
-    item.reject(new Error("Queue cleared"));
+    const err = new Error("Queue cleared");
+    err._reportedByOutput = true;
+    item.reject(err);
   }
   ctx.queue = [];
   return { found: true, cleared };
@@ -534,11 +550,136 @@ export function updateBranch(channelId, newBranch) {
   const ctx = sessions.get(channelId);
   if (!ctx) return false;
   ctx.branch = newBranch;
-  updateSessionStatus(channelId, ctx.status); // refresh DB row
-  // Also update the branch column directly
   upsertSession(channelId, PROJECT_NAME, ctx.workspacePath, newBranch, ctx.status);
   return true;
 }
+
+/**
+ * Change the model for an active session.
+ * Destroys and recreates the Copilot session with the new model.
+ * @param {string} channelId
+ * @param {import("discord.js").TextBasedChannel} channel
+ * @param {string} newModel - Model ID to switch to
+ * @returns {Promise<{ok: boolean, error?: string}>}
+ */
+export async function changeModel(channelId, channel, newModel) {
+  const ctx = sessions.get(channelId);
+  if (!ctx) return { ok: false, error: "No active session." };
+  if (ctx.status === "working") {
+    return { ok: false, error: "Cannot switch models while a task is running. Use `/stop` first." };
+  }
+
+  const oldModel = ctx.model;
+  ctx.model = newModel;
+
+  // Destroy old Copilot session
+  try { ctx.copilotSession.destroy(); } catch {}
+
+  // Create new Copilot session with the new model
+  try {
+    ctx.copilotSession = await createAgentSession({
+      channelId,
+      workspacePath: ctx.workspacePath,
+      model: newModel,
+
+      onPushRequest: async (command) => {
+        return createPushApprovalRequest(channel, ctx.workspacePath, command);
+      },
+
+      onOutsideRequest: (reason) => {
+        channel
+          .send(
+            `⛔ **Access Denied**\n${reason}\n\n` +
+              `Use \`/grant path:<absolute-path> mode:ro ttl:30\` to allow access.`
+          )
+          .catch(() => {});
+      },
+
+      onDelta: (text) => {
+        const c = sessions.get(channelId);
+        c?.output?.append(text);
+      },
+
+      onToolStart: (toolName) => {
+        const c = sessions.get(channelId);
+        if (!c) return;
+        const count = c._toolsCompleted || 0;
+        const suffix = count > 0 ? `  · ${count} done` : "";
+        c.output?.status(`🔧 \`${toolName}\`…${suffix}`);
+      },
+
+      onToolComplete: (toolName, success, error) => {
+        const c = sessions.get(channelId);
+        if (!c) return;
+        c._toolsCompleted = (c._toolsCompleted || 0) + 1;
+        if (!success && error) {
+          c.output?.append(`\n❌ \`${toolName}\`: ${error}\n`);
+        }
+        const count = c._toolsCompleted;
+        const icon = success ? "✅" : "❌";
+        c.output?.status(`${icon} \`${toolName}\`  · ${count} tool${count !== 1 ? "s" : ""} done`);
+      },
+
+      onIdle: () => {
+        const c = sessions.get(channelId);
+        if (c) {
+          c.output?.finish("✨ **Task complete.**");
+          c.status = "idle";
+          updateSessionStatus(channelId, "idle");
+        }
+      },
+
+      onUserQuestion: async (question, choices) => {
+        const c = sessions.get(channelId);
+        if (c) c.awaitingQuestion = true;
+
+        const target = c?.output?.channel || channel;
+        await target.send(
+          `❓ **Agent asks:**\n${question}` +
+            (choices ? `\nOptions: ${choices.join(", ")}` : "")
+        );
+
+        try {
+          const collected = await target.awaitMessages({
+            max: 1,
+            time: 300_000,
+            filter: (m) => {
+              if (m.author.bot) return false;
+              if (ADMIN_USER_ID && m.author.id === ADMIN_USER_ID) return true;
+              if (ADMIN_ROLE_IDS && m.member?.roles?.cache) {
+                if ([...ADMIN_ROLE_IDS].some((id) => m.member.roles.cache.has(id))) return true;
+              }
+              const responders = getChannelResponders(channelId);
+              if (responders.size > 0) return responders.has(m.author.id);
+              if (!ADMIN_ROLE_IDS) return true;
+              return false;
+            },
+          });
+          return collected.first()?.content || "No answer provided.";
+        } catch {
+          return "No answer provided within timeout.";
+        } finally {
+          if (c) c.awaitingQuestion = false;
+        }
+      },
+    });
+  } catch (err) {
+    // Rollback model on failure
+    ctx.model = oldModel;
+    log.error("Failed to recreate session with new model", { channelId, model: newModel, error: err.message });
+    return { ok: false, error: `Failed to create session with model \`${newModel}\`: ${err.message}` };
+  }
+
+  // Persist to DB
+  updateSessionModel(channelId, newModel);
+  log.info("Model changed", { channelId, from: oldModel, to: newModel });
+  return { ok: true };
+}
+
+/**
+ * List available models from the Copilot API.
+ */
+export { listAvailableModels } from "./copilot-client.mjs";
 
 /**
  * Check if a session's onUserQuestion callback is currently awaiting input.
