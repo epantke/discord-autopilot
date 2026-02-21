@@ -54,6 +54,10 @@ const RATE_LIMIT_MAX = safeInt(
   process.env.RATE_LIMIT_MAX, 10
 );
 
+// ── Startup Notifications ───────────────────────────────────────────────────
+const STARTUP_CHANNEL_ID = process.env.STARTUP_CHANNEL_ID || null;
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID || null;
+
 export {
   DISCORD_TOKEN,
   BASE_ROOT,
@@ -71,4 +75,6 @@ export {
   TASK_TIMEOUT_MS,
   RATE_LIMIT_WINDOW_MS,
   RATE_LIMIT_MAX,
+  STARTUP_CHANNEL_ID,
+  ADMIN_USER_ID,
 };

@@ -42,6 +42,9 @@ const GIT_PUSH_PATTERNS = [
   /\bgh\s+pr\s+push\b/i,
 ];
 
+// Dangerous shell wrappers that can hide commands from pattern matching
+const DANGEROUS_WRAPPERS = /\b(?:eval|source)\s/i;
+
 // Split compound commands (&&, ||, ;, |, newline) and also unwrap
 // sh -c / bash -c wrappers to detect push in any sub-part.
 const COMPOUND_SPLIT = /\s*(?:&&|\|\||[;|\n])\s*/;
@@ -54,12 +57,22 @@ function extractSubCommands(command) {
     result.push(part);
     const m = SUBSHELL_WRAPPER.exec(part);
     if (m) result.push(...m[1].split(COMPOUND_SPLIT).filter(Boolean));
+    // Also extract from $(...) command substitutions
+    const subst = part.matchAll(/\$\(([^)]+)\)/g);
+    for (const s of subst) result.push(...s[1].split(COMPOUND_SPLIT).filter(Boolean));
+    // Also extract from backtick substitutions
+    const backtick = part.matchAll(/`([^`]+)`/g);
+    for (const b of backtick) result.push(...b[1].split(COMPOUND_SPLIT).filter(Boolean));
   }
   return result;
 }
 
 export function isGitPushCommand(command) {
   const parts = extractSubCommands(command);
+  // Also detect dangerous wrappers like eval/source that can hide push commands
+  if (DANGEROUS_WRAPPERS.test(command)) return true;
+  // Detect env-variable prefix pattern: VAR=val git push
+  if (/\b\w+=\S+\s+git\s+push\b/i.test(command)) return true;
   return parts.some((part) =>
     GIT_PUSH_PATTERNS.some((re) => re.test(part))
   );
@@ -169,9 +182,8 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
       };
     }
 
-    // Scan for cd into paths outside workspace
-    const cdMatch = cmd.match(/\bcd\s+["']?([^\s"';&|]+)/);
-    if (cdMatch) {
+    // Scan for ALL cd's into paths outside workspace
+    for (const cdMatch of cmd.matchAll(/\bcd\s+["']?([^\s"';&|]+)/g)) {
       const cdTarget = resolve(workspaceRoot, cdMatch[1]);
       if (!isInsideWorkspace(cdTarget, workspaceRoot) && !isGranted(cdTarget, grants, "ro")) {
         return {

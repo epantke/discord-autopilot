@@ -14,7 +14,8 @@ function emit(level, component, message, data) {
   try {
     out.write(JSON.stringify(entry) + "\n");
   } catch {
-    out.write(`{"ts":"${entry.ts}","level":"${level}","component":"${component}","msg":"${String(message).replace(/"/g, '\\'+'"')}","serializeError":true}\n`);
+    const safe = String(message).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+    out.write(`{"ts":"${entry.ts}","level":"${level}","component":"${component}","msg":"${safe}","serializeError":true}\n`);
   }
 }
 

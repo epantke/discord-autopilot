@@ -1,4 +1,7 @@
 node_modules/
+.env
+.env.*
+!.env.example
 state.sqlite
 state.sqlite-wal
 state.sqlite-shm

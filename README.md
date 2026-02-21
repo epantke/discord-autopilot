@@ -58,6 +58,8 @@ The agent works **autonomously** within the workspace. Remote interactions in Di
 | `ALLOWED_GUILDS` | No | _(all)_ | Comma-separated guild IDs |
 | `ALLOWED_CHANNELS` | No | _(all)_ | Comma-separated channel IDs |
 | `ADMIN_ROLE_IDS` | No | _(all)_ | Comma-separated role IDs |
+| `STARTUP_CHANNEL_ID` | No | _(none)_ | Channel ID for startup/shutdown/reconnect notifications |
+| `ADMIN_USER_ID` | No | _(none)_ | User ID to receive startup/shutdown DMs |
 | `BASE_ROOT` | No | `~/.local/share/discord-agent` | Base directory |
 | `WORKSPACES_ROOT` | No | `$BASE_ROOT/workspaces` | Worktree directory |
 

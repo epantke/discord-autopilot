@@ -1,6 +1,8 @@
 import {
   Client,
+  Events,
   GatewayIntentBits,
+  Partials,
   REST,
   Routes,
   SlashCommandBuilder,
@@ -22,6 +24,8 @@ import {
   REPO_PATH,
   RATE_LIMIT_WINDOW_MS,
   RATE_LIMIT_MAX,
+  STARTUP_CHANNEL_ID,
+  ADMIN_USER_ID,
 } from "./config.mjs";
 
 import {
@@ -183,10 +187,9 @@ function isAllowed(interaction) {
   if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(interaction.channelId)) return false;
   if (ADMIN_ROLE_IDS) {
     const memberRoles = interaction.member?.roles?.cache;
-    if (memberRoles) {
-      const hasRole = [...ADMIN_ROLE_IDS].some((id) => memberRoles.has(id));
-      if (!hasRole) return false;
-    }
+    if (!memberRoles) return false;
+    const hasRole = [...ADMIN_ROLE_IDS].some((id) => memberRoles.has(id));
+    if (!hasRole) return false;
   }
   return true;
 }
@@ -217,6 +220,7 @@ function isRateLimited(interaction) {
   // Remove entries outside the window
   const cutoff = now - RATE_LIMIT_WINDOW_MS;
   while (timestamps.length > 0 && timestamps[0] <= cutoff) timestamps.shift();
+  if (timestamps.length === 0) { rateLimitMap.delete(userId); }
   if (timestamps.length >= RATE_LIMIT_MAX) return true;
   timestamps.push(now);
   return false;
@@ -254,10 +258,12 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages,
   ],
+  partials: [Partials.Channel],
 });
 
-client.once("ready", async () => {
+client.once(Events.ClientReady, async () => {
   log.info("Logged in", { tag: client.user.tag });
   try {
     await registerCommands(client.user.id);
@@ -272,7 +278,59 @@ client.once("ready", async () => {
   }
 
   log.info("Bot ready", { project: PROJECT_NAME });
+
+  // ── Startup Notification ────────────────────────────────────────────────
+  await sendStartupNotification();
 });
+
+/** Build the startup embed once and reuse for channel + DM. */
+function buildStartupEmbed() {
+  let repoInfo = "unknown";
+  try {
+    repoInfo = execSync("git remote get-url origin", { cwd: REPO_PATH, encoding: "utf-8", timeout: 5_000 }).trim();
+  } catch { /* ignore */ }
+
+  return new EmbedBuilder()
+    .setTitle("\u{1F7E2} Bot Online")
+    .setColor(0x2ecc71)
+    .setDescription(`**${client.user.tag}** is ready and listening.`)
+    .addFields(
+      { name: "Project", value: PROJECT_NAME, inline: true },
+      { name: "Commands", value: `${commands.length} registered`, inline: true },
+      { name: "Repository", value: repoInfo, inline: false },
+    )
+    .setTimestamp();
+}
+
+async function sendStartupNotification() {
+  const embed = buildStartupEmbed();
+
+  // Channel notification
+  if (STARTUP_CHANNEL_ID) {
+    try {
+      const ch = await client.channels.fetch(STARTUP_CHANNEL_ID);
+      if (ch?.isTextBased()) {
+        await ch.send({ embeds: [embed] });
+        log.info("Startup notification sent to channel", { channelId: STARTUP_CHANNEL_ID });
+      } else {
+        log.warn("STARTUP_CHANNEL_ID is not a text channel", { channelId: STARTUP_CHANNEL_ID });
+      }
+    } catch (err) {
+      log.warn("Failed to send startup notification to channel", { channelId: STARTUP_CHANNEL_ID, error: err.message });
+    }
+  }
+
+  // Admin DM notification
+  if (ADMIN_USER_ID) {
+    try {
+      const user = await client.users.fetch(ADMIN_USER_ID);
+      await user.send({ embeds: [embed] });
+      log.info("Startup DM sent to admin", { userId: ADMIN_USER_ID });
+    } catch (err) {
+      log.warn("Failed to send startup DM to admin", { userId: ADMIN_USER_ID, error: err.message });
+    }
+  }
+}
 
 // ── Interaction Handler ─────────────────────────────────────────────────────
 
@@ -764,6 +822,14 @@ client.on("messageCreate", async (message) => {
   // Check that we own this thread (the thread's ownerId matches the bot)
   if (message.channel.ownerId !== client.user.id) return;
 
+  // RBAC: check admin roles for follow-up messages
+  if (ADMIN_ROLE_IDS) {
+    const memberRoles = message.member?.roles?.cache;
+    if (!memberRoles || ![...ADMIN_ROLE_IDS].some((id) => memberRoles.has(id))) {
+      return;
+    }
+  }
+
   const prompt = message.content.trim();
   if (!prompt) return;
 
@@ -780,6 +846,28 @@ client.on("messageCreate", async (message) => {
 
 async function shutdown(signal) {
   log.info("Shutting down", { signal });
+
+  // Send shutdown notification before destroying the client
+  const shutdownEmbed = new EmbedBuilder()
+    .setTitle("\u{1F534} Bot Going Offline")
+    .setColor(0xe74c3c)
+    .setDescription(`**${client.user?.tag ?? "Bot"}** is shutting down (${signal}).`)
+    .addFields({ name: "Project", value: PROJECT_NAME, inline: true })
+    .setTimestamp();
+
+  if (STARTUP_CHANNEL_ID) {
+    try {
+      const ch = await client.channels.fetch(STARTUP_CHANNEL_ID);
+      if (ch?.isTextBased()) await ch.send({ embeds: [shutdownEmbed] });
+    } catch { /* best effort */ }
+  }
+  if (ADMIN_USER_ID) {
+    try {
+      const user = await client.users.fetch(ADMIN_USER_ID);
+      await user.send({ embeds: [shutdownEmbed] });
+    } catch { /* best effort */ }
+  }
+
   try { client.destroy(); } catch (err) { log.error("Client destroy failed", { error: err.message }); }
   try { await stopCopilotClient(); } catch (err) { log.error("Copilot stop failed", { error: err.message }); }
   try { closeDb(); } catch (err) { log.error("DB close failed", { error: err.message }); }
@@ -808,8 +896,26 @@ client.on("shardReconnecting", (shardId) => {
   log.info("Shard reconnecting", { shardId });
 });
 
-client.on("shardResume", (shardId) => {
+client.on("shardResume", async (shardId) => {
   log.info("Shard resumed", { shardId });
+
+  // Reconnect notification
+  if (STARTUP_CHANNEL_ID) {
+    try {
+      const ch = await client.channels.fetch(STARTUP_CHANNEL_ID);
+      if (ch?.isTextBased()) {
+        const embed = new EmbedBuilder()
+          .setTitle("\u{1F7E1} Bot Reconnected")
+          .setColor(0xf1c40f)
+          .setDescription(`**${client.user?.tag ?? "Bot"}** has reconnected after a brief disconnect.`)
+          .addFields({ name: "Project", value: PROJECT_NAME, inline: true })
+          .setTimestamp();
+        await ch.send({ embeds: [embed] });
+      }
+    } catch (err) {
+      log.warn("Failed to send reconnect notification", { error: err.message });
+    }
+  }
 });
 
 // ── Start ───────────────────────────────────────────────────────────────────
