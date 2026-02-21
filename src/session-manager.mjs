@@ -15,6 +15,7 @@ import {
   addResponder as dbAddResponder,
   removeResponder as dbRemoveResponder,
   getResponders as dbGetResponders,
+  deleteRespondersByChannel,
   pruneOldTasks,
 } from "./state.mjs";
 import { createAgentSession, listAvailableModels } from "./copilot-client.mjs";
@@ -110,6 +111,12 @@ async function createWorktree(channelId) {
 // ── Session CRUD ────────────────────────────────────────────────────────────
 
 /**
+ * Pending session creation promises to prevent duplicate sessions
+ * when concurrent getOrCreateSession calls arrive for the same channel.
+ */
+const _pendingCreation = new Map();
+
+/**
  * Get or create a session for a Discord channel.
  * @param {string} channelId
  * @param {import("discord.js").TextBasedChannel} channel
@@ -118,6 +125,22 @@ export async function getOrCreateSession(channelId, channel) {
   if (sessions.has(channelId)) {
     return sessions.get(channelId);
   }
+
+  // Guard against concurrent first-task race: reuse the in-flight promise
+  if (_pendingCreation.has(channelId)) {
+    return _pendingCreation.get(channelId);
+  }
+
+  const promise = _createSession(channelId, channel);
+  _pendingCreation.set(channelId, promise);
+  try {
+    return await promise;
+  } finally {
+    _pendingCreation.delete(channelId);
+  }
+}
+
+async function _createSession(channelId, channel) {
 
   // Check DB for existing session
   const dbRow = getSession(channelId);
@@ -358,7 +381,7 @@ async function processQueue(channelId, channel) {
       timeoutTimer = setTimeout(() => rej(new Error("Task timed out")), TASK_TIMEOUT_MS);
       timeoutTimer.unref();
     });
-    const taskPromise = ctx.copilotSession.sendAndWait({ prompt });
+    const taskPromise = ctx.copilotSession.sendAndWait({ prompt, timeout: TASK_TIMEOUT_MS });
     taskPromise.catch(() => {}); // prevent unhandled rejection if timeout wins
     const response = await Promise.race([taskPromise, timeout]);
     clearTimeout(timeoutTimer);
@@ -366,6 +389,7 @@ async function processQueue(channelId, channel) {
     log.info("Task completed", { channelId, taskId: ctx.taskId });
     ctx.status = "idle";
     updateSessionStatus(channelId, "idle");
+    await ctx.output?.finish("✨ **Task complete.**");
     resolve(response);
   } catch (err) {
     clearTimeout(timeoutTimer);
@@ -443,8 +467,10 @@ export async function resetSession(channelId) {
     }
   }
   sessions.delete(channelId);
+  responderStore.delete(channelId);
   try { revokeAllGrants(channelId); } catch (err) { log.error("Failed to revoke grants on reset", { channelId, error: err.message }); }
   try { dbDeleteSession(channelId); } catch (err) { log.error("Failed to delete session from DB", { channelId, error: err.message }); }
+  try { deleteRespondersByChannel(channelId); } catch (err) { log.error("Failed to delete responders on reset", { channelId, error: err.message }); }
 }
 
 // ── Hard Stop ───────────────────────────────────────────────────────────────
@@ -550,7 +576,7 @@ export function updateBranch(channelId, newBranch) {
   const ctx = sessions.get(channelId);
   if (!ctx) return false;
   ctx.branch = newBranch;
-  upsertSession(channelId, PROJECT_NAME, ctx.workspacePath, newBranch, ctx.status);
+  upsertSession(channelId, PROJECT_NAME, ctx.workspacePath, newBranch, ctx.status, ctx.model);
   return true;
 }
 
@@ -573,11 +599,11 @@ export async function changeModel(channelId, channel, newModel) {
   ctx.model = newModel;
 
   // Destroy old Copilot session
-  try { ctx.copilotSession.destroy(); } catch {}
-
-  // Create new Copilot session with the new model
+  // Create the new session FIRST — only destroy the old one on success
+  // to avoid bricking ctx.copilotSession if the new one fails
+  let newSession;
   try {
-    ctx.copilotSession = await createAgentSession({
+    newSession = await createAgentSession({
       channelId,
       workspacePath: ctx.workspacePath,
       model: newModel,
@@ -587,7 +613,9 @@ export async function changeModel(channelId, channel, newModel) {
       },
 
       onOutsideRequest: (reason) => {
-        channel
+        const c = sessions.get(channelId);
+        const target = c?.output?.channel || channel;
+        target
           .send(
             `⛔ **Access Denied**\n${reason}\n\n` +
               `Use \`/grant path:<absolute-path> mode:ro ttl:30\` to allow access.`
@@ -664,11 +692,15 @@ export async function changeModel(channelId, channel, newModel) {
       },
     });
   } catch (err) {
-    // Rollback model on failure
+    // Rollback model on failure — old session is still alive
     ctx.model = oldModel;
     log.error("Failed to recreate session with new model", { channelId, model: newModel, error: err.message });
     return { ok: false, error: `Failed to create session with model \`${newModel}\`: ${err.message}` };
   }
+
+  // Success — destroy old session and swap in the new one
+  try { ctx.copilotSession.destroy(); } catch {}
+  ctx.copilotSession = newSession;
 
   // Persist to DB
   updateSessionModel(channelId, newModel);
@@ -704,7 +736,10 @@ const _idleSweep = setInterval(() => {
     if (idle >= IDLE_SWEEP_MS) {
       try { ctx.copilotSession.destroy(); } catch {}
       revokeAllGrants(channelId);
+      responderStore.delete(channelId);
       sessions.delete(channelId);
+      try { dbDeleteSession(channelId); } catch {}
+      try { deleteRespondersByChannel(channelId); } catch {}
       log.info("Idle session swept", { channelId });
     }
   }

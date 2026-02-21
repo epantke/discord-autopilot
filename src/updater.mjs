@@ -165,5 +165,6 @@ export async function downloadAndApplyUpdate() {
 
 export function restartBot() {
   log.info("Restarting bot for update");
-  process.exit(0);
+  // Trigger the graceful shutdown handler instead of raw exit
+  process.kill(process.pid, "SIGTERM");
 }

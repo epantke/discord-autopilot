@@ -198,8 +198,8 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
     }
 
     // Scan for ALL cd's into paths outside workspace
-    for (const cdMatch of cmd.matchAll(/\b(?:cd|pushd)\s+(?:--\s+)?["']?([^\s"';&|]+)/g)) {
-      const rawTarget = cdMatch[1];
+    for (const cdMatch of cmd.matchAll(/\b(?:cd|pushd)\s+(?:--\s+)?(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g)) {
+      const rawTarget = cdMatch[1] || cdMatch[2] || cdMatch[3];
       // Block tilde expansion — shell expands ~ to home dir, bypassing resolve()
       if (rawTarget === "~" || rawTarget.startsWith("~/")) {
         return {

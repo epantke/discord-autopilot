@@ -24,6 +24,8 @@ function readNormalized(filePath) {
 
 const srcDir = join(__dirname, "src");
 const pkgJsonContent = readNormalized(join(srcDir, "package.json"));
+const PKG_VERSION = JSON.parse(pkgJsonContent).version || "0.0.0";
+console.log(`Version: ${PKG_VERSION}`);
 const srcFiles = readdirSync(srcDir).filter((f) => f.endsWith(".mjs")).sort();
 
 const sources = [
@@ -106,7 +108,8 @@ function buildBash() {
   section.push(`ok "${total} embedded files written"`);
   section.push("");
 
-  return [...lines.slice(0, step5Start), ...section, ...lines.slice(step6Start)].join("\n");
+  return [...lines.slice(0, step5Start), ...section, ...lines.slice(step6Start)].join("\n")
+    .replace('SCRIPT_VERSION="0.0.0-dev"', `SCRIPT_VERSION="${PKG_VERSION}"`);
 }
 
 // ── Build agent.ps1 ─────────────────────────────────────────────────────────
@@ -165,7 +168,8 @@ function buildPs1() {
   section.push(`Write-Ok "${total} embedded files written"`);
   section.push("");
 
-  return [...lines.slice(0, step6Idx), ...section, ...lines.slice(step7Start)].join("\n");
+  return [...lines.slice(0, step6Idx), ...section, ...lines.slice(step7Start)].join("\n")
+    .replace("$ScriptVersion = '0.0.0-dev'", () => `$ScriptVersion = '${PKG_VERSION}'`);
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────

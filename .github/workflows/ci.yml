@@ -85,6 +85,7 @@ jobs:
             secret-scanner.mjs
             session-manager.mjs
             state.mjs
+            updater.mjs
           )
 
           errors=0
@@ -167,9 +168,17 @@ jobs:
       - name: Make agent.sh executable
         run: chmod +x dist/agent.sh
 
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum agent.sh agent.ps1 > checksums.txt
+          echo "Generated checksums:"
+          cat checksums.txt
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/agent.sh
             dist/agent.ps1
+            dist/checksums.txt
           generate_release_notes: true

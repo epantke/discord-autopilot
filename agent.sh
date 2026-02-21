@@ -12,7 +12,10 @@ info()  { echo -e "${CYAN}[INFO]${NC}  $*"; }
 ok()    { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 die()   { echo -e "${RED}[FATAL]${NC} $*" >&2; exit 1; }
-
+# ── Version & update config ──────────────────────────────────────────────────────
+SCRIPT_VERSION="0.0.0-dev"
+UPDATE_REPO="epantke/remote-coding-agent"
+UPDATE_API_URL="https://api.github.com/repos/$UPDATE_REPO/releases/latest"
 # ──────────────────────────────────────────────────────────────────────────────
 # 1) Load .env if present, then single question: Repo URL
 # ──────────────────────────────────────────────────────────────────────────────
@@ -23,11 +26,96 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
   source "$SCRIPT_DIR/.env"
   set +a
 fi
+
+# ── Handle --update flag ────────────────────────────────────────────────────────
+if [[ "${1:-}" == "--update" || "${1:-}" == "-u" ]]; then
+  if [[ "$SCRIPT_VERSION" == "0.0.0-dev" ]]; then
+    info "Running from source — use 'git pull' to update instead."
+    exit 0
+  fi
+
+  info "Current version: v$SCRIPT_VERSION"
+  info "Checking for updates…"
+
+  RELEASE_DATA=$(curl -sL --max-time 15 \
+    -H "User-Agent: discord-copilot-agent/$SCRIPT_VERSION" \
+    ${GITHUB_TOKEN:+-H "Authorization: token $GITHUB_TOKEN"} \
+    "$UPDATE_API_URL" 2>/dev/null) || die "Failed to fetch release info."
+
+  LATEST_VER=$(echo "$RELEASE_DATA" | node -e "
+    process.stdout.write((JSON.parse(require('fs').readFileSync(0,'utf8')).tag_name||'').replace(/^v/,''))
+  " 2>/dev/null) || die "Failed to parse release data."
+
+  [[ -z "$LATEST_VER" ]] && die "Could not determine latest version."
+
+  if [[ "$LATEST_VER" == "$SCRIPT_VERSION" ]]; then
+    ok "Already on latest version (v$SCRIPT_VERSION)"
+    exit 0
+  fi
+
+  HIGHEST=$(printf '%s\n%s' "$LATEST_VER" "$SCRIPT_VERSION" | sort -V | tail -1)
+  if [[ "$HIGHEST" != "$LATEST_VER" ]]; then
+    ok "Already up to date (v$SCRIPT_VERSION, latest release: v$LATEST_VER)"
+    exit 0
+  fi
+
+  DOWNLOAD_URL=$(echo "$RELEASE_DATA" | node -e "
+    const r=JSON.parse(require('fs').readFileSync(0,'utf8'));
+    const a=(r.assets||[]).find(a=>a.name==='agent.sh');
+    process.stdout.write(a?.browser_download_url||'')
+  " 2>/dev/null)
+  [[ -z "$DOWNLOAD_URL" ]] && die "No agent.sh asset found in release v$LATEST_VER"
+
+  info "Downloading v$LATEST_VER…"
+  TMPFILE=$(mktemp)
+  trap 'rm -f "$TMPFILE"' EXIT
+
+  curl -sL --max-time 60 -o "$TMPFILE" "$DOWNLOAD_URL" 2>/dev/null || { rm -f "$TMPFILE"; die "Download failed."; }
+
+  if ! head -1 "$TMPFILE" | grep -q "#!/usr/bin/env bash"; then
+    rm -f "$TMPFILE"
+    die "Downloaded file is not a valid bash script."
+  fi
+
+  SELF_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+  cp "$SELF_PATH" "${SELF_PATH}.bak"
+  mv "$TMPFILE" "$SELF_PATH"
+  chmod +x "$SELF_PATH"
+  trap - EXIT
+
+  echo ""
+  ok "Updated to v$LATEST_VER!"
+  ok "Backup saved as $(basename "${SELF_PATH}.bak")"
+  info "Restart the script to use the new version."
+  echo ""
+  exit 0
+fi
+
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║  Discord Autopilot                              ║${NC}"
+echo -e "${CYAN}║${NC}  Discord Autopilot  ${GREEN}v${SCRIPT_VERSION}${NC}"
 echo -e "${CYAN}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
+
+# Quick update check (non-blocking, 3s timeout)
+if [[ "$SCRIPT_VERSION" != "0.0.0-dev" ]] && command -v curl >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+  _UPDATE_JSON=$(curl -sL --max-time 3 -H "User-Agent: discord-copilot-agent/$SCRIPT_VERSION" "$UPDATE_API_URL" 2>/dev/null || true)
+  if [[ -n "$_UPDATE_JSON" ]]; then
+    _LATEST_VER=$(echo "$_UPDATE_JSON" | node -e "
+      process.stdout.write((JSON.parse(require('fs').readFileSync(0,'utf8')).tag_name||'').replace(/^v/,''))
+    " 2>/dev/null || true)
+    if [[ -n "$_LATEST_VER" && "$_LATEST_VER" != "$SCRIPT_VERSION" ]]; then
+      _HIGHEST=$(printf '%s\n%s' "$_LATEST_VER" "$SCRIPT_VERSION" | sort -V | tail -1)
+      if [[ "$_HIGHEST" == "$_LATEST_VER" ]]; then
+        echo -e "  ${YELLOW}⚡ UPDATE AVAILABLE: ${GREEN}v${_LATEST_VER}${NC}"
+        echo -e "     ${YELLOW}Current: v${SCRIPT_VERSION}  →  Latest: v${_LATEST_VER}${NC}"
+        _SCRIPT_NAME=$(basename "${BASH_SOURCE[0]}")
+        echo -e "     ${YELLOW}Run ${CYAN}./${_SCRIPT_NAME} --update${YELLOW} to upgrade${NC}"
+        echo ""
+      fi
+    fi
+  fi
+fi
 
 if [[ -n "${REPO_URL:-}" ]]; then
   info "Using REPO_URL from environment: $REPO_URL"
@@ -140,7 +228,7 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
     GH_HEADERS_FILE=$(mktemp)
     GH_BODY_FILE=$(mktemp)
     GH_HTTP=$(curl -s -D "$GH_HEADERS_FILE" -o "$GH_BODY_FILE" -w "%{http_code}" \
-      -H "User-Agent: discord-copilot-agent/1.0" \
+      -H "User-Agent: discord-copilot-agent/$SCRIPT_VERSION" \
       -H @- "https://api.github.com/user" --max-time 10 2>/dev/null <<< "Authorization: token $GITHUB_TOKEN")
 
     if [[ "$GH_HTTP" == "200" ]]; then
@@ -194,7 +282,7 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
       if [[ "$REPO_PATH" =~ ^[^/]+/[^/]+$ ]]; then
         GH_REPO_FILE=$(mktemp)
         REPO_HTTP=$(curl -s -o "$GH_REPO_FILE" -w "%{http_code}" \
-          -H "User-Agent: discord-copilot-agent/1.0" \
+          -H "User-Agent: discord-copilot-agent/$SCRIPT_VERSION" \
           -H @- "https://api.github.com/repos/$REPO_PATH" --max-time 10 2>/dev/null <<< "Authorization: token $GITHUB_TOKEN")
         if [[ "$REPO_HTTP" == "200" ]]; then
           CAN_PUSH=$(grep -o '"push":[a-z]*' "$GH_REPO_FILE" | head -1 | grep -o 'true\|false')
@@ -340,6 +428,7 @@ echo ""
 
 export PROJECT_NAME
 export REPO_PATH="$REPO_DIR"
+export AGENT_SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 
 # Validate snowflake IDs (17-20 digits)
 if [[ -n "${ADMIN_USER_ID:-}" && ! "${ADMIN_USER_ID}" =~ ^[0-9]{17,20}$ ]]; then

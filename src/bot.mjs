@@ -35,6 +35,8 @@ import {
   STARTUP_CHANNEL_ID,
   ADMIN_USER_ID,
   DEFAULT_MODEL,
+  CURRENT_VERSION,
+  UPDATE_CHECK_INTERVAL_MS,
 } from "./config.mjs";
 
 import {
@@ -267,7 +269,8 @@ const commands = [
     )
     .addStringOption((opt) =>
       opt.setName("name").setDescription("Model ID to switch to (for set)").setAutocomplete(true)
-    ),
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 ];
 
 // ── Access Control ──────────────────────────────────────────────────────────
@@ -523,7 +526,7 @@ async function validateEnvironment() {
       const resp = await fetch("https://api.github.com/user", {
         headers: {
           Authorization: `token ${GITHUB_TOKEN}`,
-          "User-Agent": "discord-copilot-agent/1.0",
+          "User-Agent": `discord-copilot-agent/${CURRENT_VERSION}`,
         },
         signal: AbortSignal.timeout(10_000),
       });
@@ -1602,8 +1605,18 @@ client.on("interactionCreate", async (interaction) => {
 
 // ── Follow-up in Threads & DMs ──────────────────────────────────────────────
 
+// Known command names for detecting slash-command-like messages typed as plain text
+const KNOWN_COMMANDS = new Set(commands.map((c) => c.name));
+
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
+
+  // Detect plain-text messages that look like slash commands (e.g. "/model", "/status")
+  const slashMatch = message.content.trim().match(/^\/([\w-]+)/);
+  if (slashMatch && KNOWN_COMMANDS.has(slashMatch[1])) {
+    message.reply(`💡 **\`/${slashMatch[1]}\`** is a slash command — type it in the message bar and pick it from the popup, or use it in a server channel (not as plain text).`).catch(() => {});
+    return;
+  }
 
   const isDM = !message.guild;
 
@@ -1630,6 +1643,7 @@ client.on("messageCreate", async (message) => {
     message.react("✅").catch(() => {});
 
     enqueueTask(dmChannelId, message.channel, prompt, message.channel, { id: message.author.id, tag: message.author.tag }).catch((err) => {
+      if (err._reportedByOutput) return;
       message.channel
         .send(`❌ **Follow-up failed:** ${redactSecrets(err.message).clean}`)
         .catch(() => {});
@@ -1668,6 +1682,7 @@ client.on("messageCreate", async (message) => {
   message.react("✅").catch(() => {});
 
   enqueueTask(parentId, parent, prompt, message.channel, { id: message.author.id, tag: message.author.tag }).catch((err) => {
+    if (err._reportedByOutput) return;
     message.channel
       .send(`❌ **Follow-up failed:** ${redactSecrets(err.message).clean}`)
       .catch(() => {});

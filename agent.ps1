@@ -4,8 +4,11 @@
   Discord Autopilot — Autonomous AI Coding Agent (Windows PowerShell)
 .DESCRIPTION
   Single-script deployment. Run: .\agent.ps1
-  Equivalent to agent.sh for Windows environments.
+  Run .\agent.ps1 -Update to check for and install updates.
 #>
+param(
+    [switch]$Update
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -46,7 +49,7 @@ function Write-Step {
 function Write-FileProgress {
     param([string]$Name, [int]$Current, [int]$Total)
     $pct  = [math]::Round(($Current / $Total) * 100)
-    $fill = [math]::Round(($Current / $Total) * 20)
+    $fill = [math]::Min(20, [math]::Round(($Current / $Total) * 20))
     $bar  = ([string][char]0x2588) * $fill + ([string][char]0x2591) * (20 - $fill)
     Write-Host "       $([char]0x2502) " -ForegroundColor DarkGray -NoNewline
     Write-Host "$bar" -ForegroundColor Cyan -NoNewline
@@ -87,6 +90,75 @@ if (Test-Path $EnvFile) {
 Write-Host ''
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
+# ── Version & self-update ───────────────────────────────────────────────────────
+$ScriptVersion = '0.0.0-dev'
+$UpdateRepo = 'epantke/remote-coding-agent'
+$UpdateApiUrl = "https://api.github.com/repos/$UpdateRepo/releases/latest"
+
+if ($Update) {
+    if ($ScriptVersion -eq '0.0.0-dev') {
+        Write-Info 'Running from source — use "git pull" to update instead.'
+        exit 0
+    }
+
+    Write-Host ''
+    Write-Info "Current version: v$ScriptVersion"
+    Write-Info 'Checking for updates…'
+
+    $headers = @{ 'User-Agent' = "discord-copilot-agent/$ScriptVersion" }
+    $ghToken = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN','Process')
+    if ($ghToken) { $headers['Authorization'] = "token $ghToken" }
+
+    try {
+        $release = Invoke-RestMethod -Uri $UpdateApiUrl -Headers $headers -TimeoutSec 15
+    } catch {
+        Write-Fatal "Failed to fetch release info: $($_.Exception.Message)"
+    }
+
+    $latestVer = ($release.tag_name -replace '^v', '')
+    if (-not $latestVer) { Write-Fatal 'Could not determine latest version' }
+
+    $isNewer = $false
+    try { $isNewer = [version]$latestVer -gt [version]$ScriptVersion } catch { $isNewer = $latestVer -ne $ScriptVersion }
+
+    if (-not $isNewer) {
+        Write-Ok "Already on latest version (v$ScriptVersion)"
+        exit 0
+    }
+
+    $asset = $release.assets | Where-Object { $_.name -eq 'agent.ps1' } | Select-Object -First 1
+    if (-not $asset) {
+        Write-Fatal "No agent.ps1 asset found in release $($release.tag_name)"
+    }
+
+    Write-Info "Downloading v$latestVer…"
+
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    try {
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tempFile -TimeoutSec 60 -UseBasicParsing
+
+        $firstLine = Get-Content $tempFile -First 1
+        if ($firstLine -notmatch '#Requires') {
+            Remove-Item $tempFile -Force
+            Write-Fatal 'Downloaded file does not appear to be a valid PowerShell script'
+        }
+
+        $selfPath = $MyInvocation.MyCommand.Definition
+        Copy-Item -Path $selfPath -Destination "$selfPath.bak" -Force
+        Move-Item -Path $tempFile -Destination $selfPath -Force
+
+        Write-Host ''
+        Write-Ok "Updated to v$latestVer!"
+        Write-Ok "Backup saved as $(Split-Path "$selfPath.bak" -Leaf)"
+        Write-Info 'Restart the script to use the new version.'
+        Write-Host ''
+    } catch {
+        if (Test-Path $tempFile) { Remove-Item $tempFile -Force }
+        Write-Fatal "Download failed: $($_.Exception.Message)"
+    }
+    exit 0
+}
+
 Write-Host '   ___  _                       _' -ForegroundColor Magenta
 Write-Host '  |   \(_)___ __ ___ _ _ __| |' -ForegroundColor Magenta
 Write-Host '  | |) | (_-</ _/ _ \ ''_/ _` |' -ForegroundColor Magenta
@@ -97,8 +169,32 @@ Write-Host ' C o p i l o t' -ForegroundColor Cyan
 Write-Host ''
 Write-Host ('    ' + ([string][char]0x2550) * 46) -ForegroundColor DarkGray
 Write-Host '    Discord Autopilot' -ForegroundColor DarkGray -NoNewline
-Write-Host '   v1.0' -ForegroundColor DarkCyan
+Write-Host "   v$ScriptVersion" -ForegroundColor DarkCyan
 Write-Host ('    ' + ([string][char]0x2550) * 46) -ForegroundColor DarkGray
+
+# Quick update check (non-blocking, 3s timeout)
+if ($ScriptVersion -ne '0.0.0-dev') {
+    try {
+        $checkHeaders = @{ 'User-Agent' = "discord-copilot-agent/$ScriptVersion" }
+        $releaseCheck = Invoke-RestMethod -Uri $UpdateApiUrl -TimeoutSec 3 -Headers $checkHeaders -ErrorAction Stop
+        $latestCheck = ($releaseCheck.tag_name -replace '^v', '')
+        if ($latestCheck -and $latestCheck -ne $ScriptVersion) {
+            try {
+                if ([version]$latestCheck -gt [version]$ScriptVersion) {
+                    Write-Host ''
+                    Write-Host "  $([char]0x26A1) UPDATE AVAILABLE: " -ForegroundColor Yellow -NoNewline
+                    Write-Host "v$latestCheck" -ForegroundColor Green
+                    Write-Host "     Current: v$ScriptVersion  $([char]0x2192)  Latest: v$latestCheck" -ForegroundColor Yellow
+                    $scriptFileName = Split-Path $MyInvocation.MyCommand.Definition -Leaf
+                    Write-Host '     Run ' -ForegroundColor Yellow -NoNewline
+                    Write-Host ".\$scriptFileName -Update" -ForegroundColor Cyan -NoNewline
+                    Write-Host ' to upgrade' -ForegroundColor Yellow
+                    Write-Host ''
+                }
+            } catch {}
+        }
+    } catch {}
+}
 
 # ── Setup Wizard ─────────────────────────────────────────────────────────────
 
@@ -564,7 +660,7 @@ if ($ghToken) {
     try {
         $ghHeaders = @{
             Authorization = "token $ghToken"
-            'User-Agent'  = 'discord-copilot-agent/1.0'
+            'User-Agent'  = "discord-copilot-agent/$ScriptVersion"
         }
         $ghResponse = Invoke-WebRequest -Uri 'https://api.github.com/user' -Headers $ghHeaders -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop
         $ghUser = ($ghResponse.Content | ConvertFrom-Json).login
@@ -807,18 +903,17 @@ $lockSrc = Join-Path $ScriptDir 'src\package-lock.json'
 if (Test-Path $lockSrc) {
     Copy-Utf8File $lockSrc (Join-Path $App 'package-lock.json')
 }
-Write-FileProgress 'package.json' 1 12
-
 # Copy all source files
 $sourceFiles = Get-ChildItem $SrcDir -Filter '*.mjs' | Sort-Object Name
+$totalFiles = $sourceFiles.Count + 1   # +1 for package.json
+Write-FileProgress 'package.json' 1 $totalFiles
 $i = 1
 foreach ($file in $sourceFiles) {
     $i++
     Copy-Utf8File $file.FullName (Join-Path $AppSrc $file.Name)
-    Write-FileProgress $file.Name $i 12
+    Write-FileProgress $file.Name $i $totalFiles
 }
 
-$totalFiles = $i
 Write-Ok "$totalFiles source files copied"
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -884,5 +979,6 @@ $env:PROJECT_NAME      = $ProjectName
 $env:REPO_PATH         = $RepoDir
 $env:ADMIN_USER_ID     = [Environment]::GetEnvironmentVariable('ADMIN_USER_ID','Process')
 $env:STARTUP_CHANNEL_ID = [Environment]::GetEnvironmentVariable('STARTUP_CHANNEL_ID','Process')
+$env:AGENT_SCRIPT_PATH = $MyInvocation.MyCommand.Definition
 
 & node (Join-Path $App 'src\bot.mjs')
