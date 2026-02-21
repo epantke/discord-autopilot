@@ -195,6 +195,14 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         else
           info "Scope: workflow not set (optional, for .github/workflows/)"
         fi
+
+        if echo "$GH_SCOPES" | grep -qw "copilot"; then
+          ok "Scope: copilot (Copilot SDK)"
+        else
+          warn "Scope: copilot MISSING — required for the Copilot SDK"
+          warn "  Edit your token: https://github.com/settings/tokens > copilot scope"
+          VALIDATION_FAILED=true
+        fi
       else
         info "Scopes: n/a (fine-grained PAT)"
         info "  Ensure token has: Contents (read/write) + Pull requests (read/write)"

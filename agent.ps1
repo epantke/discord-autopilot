@@ -623,8 +623,18 @@ if ($ghToken) {
                 Write-Info '  Needed only if the agent modifies .github/workflows/ files.'
             }
 
+            $hasCopilot = $scopeList -contains 'copilot'
+            if ($hasCopilot) {
+                Write-Check 'Scope: copilot' 'granted (Copilot SDK)' $true
+            } else {
+                Write-Check 'Scope: copilot' 'MISSING' $false
+                Write-Warn '  Required for the Copilot SDK to list models and create sessions.'
+                Write-Warn '  Edit your token: https://github.com/settings/tokens > copilot scope'
+                $script:validationOk = $false
+            }
+
             # Show all scopes for transparency
-            if (-not $hasRepo) {
+            if (-not $hasRepo -or -not $hasCopilot) {
                 Write-Warn "  Current scopes: $scopes"
             }
         } else {

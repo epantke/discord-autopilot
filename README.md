@@ -8,6 +8,7 @@
 [![Discord.js](https://img.shields.io/badge/discord.js-v14-5865F2?logo=discord&logoColor=white)](https://discord.js.org)
 [![Copilot SDK](https://img.shields.io/badge/built%20with-Copilot%20SDK-000?logo=github)](https://github.com/github/copilot-sdk)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Pages](https://img.shields.io/badge/docs-GitHub%20Pages-5865F2?logo=github)](https://epantke.github.io/remote-coding-agent/)
 
 </div>
 

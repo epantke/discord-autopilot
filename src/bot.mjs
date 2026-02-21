@@ -439,7 +439,17 @@ async function validateEnvironment() {
         errors.push("GITHUB_TOKEN is expired or invalid (401). Generate a new one at https://github.com/settings/tokens");
       } else if (resp.status === 403) {
         warnings.push("GITHUB_TOKEN returned 403 (rate-limited or forbidden). The token may still work.");
-      } else if (!resp.ok) {
+      } else if (resp.ok) {
+        // Check for copilot scope (classic PATs expose X-OAuth-Scopes)
+        const scopes = resp.headers.get("x-oauth-scopes") || "";
+        if (scopes && !scopes.split(",").map((s) => s.trim()).includes("copilot")) {
+          errors.push(
+            "GITHUB_TOKEN is missing the `copilot` scope. " +
+            "Edit your token at https://github.com/settings/tokens and enable the `copilot` scope, " +
+            "or run `copilot auth login` on the host."
+          );
+        }
+      } else {
         warnings.push(`GITHUB_TOKEN validation returned HTTP ${resp.status}. Might be a transient issue.`);
       }
     } catch (err) {

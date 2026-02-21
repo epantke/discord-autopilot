@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Remote Coding Agent — Discord × Copilot</title>
+  <meta name="description" content="Delegate coding tasks to an autonomous AI agent — right from Discord. Edits, tests, commits, and streams progress live.">
+  <meta name="theme-color" content="#5865F2">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="Remote Coding Agent — Discord × Copilot">
+  <meta property="og:description" content="Delegate coding tasks to an autonomous AI agent — right from Discord.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://epantke.github.io/remote-coding-agent/">
+
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- ── Navigation ──────────────────────────────────────────────────────── -->
+  <nav class="nav" id="nav">
+    <div class="nav-inner">
+      <a href="#" class="nav-logo">
+        <img src="favicon.svg" alt="" width="32" height="32">
+        Remote Coding Agent
+      </a>
+
+      <ul class="nav-links" id="nav-links">
+        <li><a href="#features">Features</a></li>
+        <li><a href="#how-it-works">How It Works</a></li>
+        <li><a href="#commands">Commands</a></li>
+        <li><a href="#quickstart">Quick Start</a></li>
+        <li><a href="#config">Config</a></li>
+        <li><a href="#security">Security</a></li>
+      </ul>
+
+      <div class="nav-actions">
+        <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">🌙</button>
+        <button class="nav-hamburger" id="nav-hamburger" aria-label="Menu">☰</button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ── Hero ────────────────────────────────────────────────────────────── -->
+  <section class="hero" id="hero">
+    <div class="hero-badge">
+      <span class="dot"></span>
+      Open Source &middot; MIT License
+    </div>
+
+    <h1>
+      Autonomous coding,<br>
+      <span class="gradient">right from Discord</span>
+    </h1>
+
+    <p class="hero-sub">
+      Drop a <code>/task</code> in Discord and the agent edits files, runs tests, commits
+      — and streams progress live into a thread. Push always requires your approval.
+    </p>
+
+    <div class="hero-demo">
+      <span class="prompt">/task</span>
+      <span class="typed" id="typed"></span><span class="cursor"></span>
+    </div>
+
+    <div class="hero-cta">
+      <a id="download-btn" class="btn btn-primary" href="https://github.com/epantke/remote-coding-agent/releases/latest" target="_blank" rel="noopener">
+        ↓ Download
+      </a>
+      <a class="btn btn-secondary" href="https://github.com/epantke/remote-coding-agent" target="_blank" rel="noopener">
+        ★ View on GitHub
+      </a>
+    </div>
+  </section>
+
+  <!-- ── Features ────────────────────────────────────────────────────────── -->
+  <section class="section" id="features">
+    <div class="reveal">
+      <div class="section-label">Features</div>
+      <h2 class="section-title">Everything you need for remote AI coding</h2>
+      <p class="section-desc">A full-featured autonomous agent that lives in your Discord server — with security, streaming, and collaboration built in.</p>
+    </div>
+
+    <div class="features-grid">
+      <div class="feature-card reveal">
+        <span class="feature-icon">🤖</span>
+        <h3>Autonomous Agent</h3>
+        <p>Edits files, runs tests, and creates commits — no hand-holding required. Powered by GitHub Copilot SDK.</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-icon">📡</span>
+        <h3>Live Streaming</h3>
+        <p>Output streams in real-time into per-task Discord threads. Throttled and chunked for smooth updates.</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-icon">🔒</span>
+        <h3>Push Approval Gate</h3>
+        <p><code>git push</code> and PR actions always require human approval via Discord buttons. 10 min timeout.</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-icon">🧵</span>
+        <h3>Thread &amp; DM Follow-ups</h3>
+        <p>Reply in an agent thread or DM to send follow-up tasks. The agent picks them up automatically.</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-icon">📁</span>
+        <h3>Task Queue</h3>
+        <p>Queue multiple tasks, pause, resume, or clear at will. Up to 50 queued tasks per session.</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-icon">❓</span>
+        <h3>Ask User</h3>
+        <p>Agent can ask clarifying questions via Discord and wait for your answer. 5 minute timeout.</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-icon">🛡️</span>
+        <h3>Deny-by-Default</h3>
+        <p>All file and shell access outside the workspace is blocked unless explicitly granted via <code>/grant</code>.</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-icon">🔑</span>
+        <h3>Secret Scanner</h3>
+        <p>Auto-redacts 9 token patterns (GitHub PAT, AWS, Slack, OpenAI, …) before posting to Discord.</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-icon">💾</span>
+        <h3>Session Recovery</h3>
+        <p>Sessions, grants, and task history survive bot restarts. Backed by SQLite in WAL mode.</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-icon">🏗️</span>
+        <h3>Workspace Isolation</h3>
+        <p>Each Discord channel and DM gets its own git worktree. Complete isolation between users.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── How It Works ────────────────────────────────────────────────────── -->
+  <section class="section" id="how-it-works">
+    <div class="reveal">
+      <div class="section-label">How It Works</div>
+      <h2 class="section-title">From slash command to commit</h2>
+      <p class="section-desc">Four simple steps — the agent handles the rest.</p>
+    </div>
+
+    <div class="flow-steps reveal">
+      <div class="flow-step">
+        <h3>/task</h3>
+        <p>You send a task in Discord. The bot creates a thread and provisions a git worktree for this session.</p>
+      </div>
+      <div class="flow-step">
+        <h3>Agent works</h3>
+        <p>Copilot agent works autonomously. Every tool call passes through the deny-by-default policy engine.</p>
+      </div>
+      <div class="flow-step">
+        <h3>Live stream</h3>
+        <p>Output streams in real-time into the thread. Secrets are redacted before posting. You can send follow-ups.</p>
+      </div>
+      <div class="flow-step">
+        <h3>Push gate</h3>
+        <p>When it's time to push, the agent asks for approval via buttons. You review the diff and decide.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Commands ────────────────────────────────────────────────────────── -->
+  <section class="section" id="commands">
+    <div class="reveal">
+      <div class="section-label">Commands</div>
+      <h2 class="section-title">16 slash commands</h2>
+      <p class="section-desc">Complete control over the agent — from tasks to branches to access grants.</p>
+    </div>
+
+    <div class="reveal">
+      <div class="commands-filter">
+        <span class="search-icon">⌕</span>
+        <input type="text" id="cmd-filter" placeholder="Filter commands…" autocomplete="off">
+      </div>
+
+      <div class="commands-table-wrapper">
+        <table id="commands-table">
+          <thead>
+            <tr>
+              <th>Command</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>/task prompt:&lt;text&gt;</code></td><td>Send a coding task to the agent</td></tr>
+            <tr><td><code>/stop</code></td><td>Abort running task (optionally clear queue)</td></tr>
+            <tr><td><code>/pause</code></td><td>Pause queue processing</td></tr>
+            <tr><td><code>/resume</code></td><td>Resume queue processing</td></tr>
+            <tr><td><code>/queue</code></td><td>View or clear pending tasks</td></tr>
+            <tr><td><code>/history</code></td><td>Show recent task history</td></tr>
+            <tr><td><code>/status</code></td><td>Session status, queue &amp; active grants</td></tr>
+            <tr><td><code>/diff</code></td><td>Show git diff in workspace (stat, full, or staged)</td></tr>
+            <tr><td><code>/branch</code></td><td>Manage agent branches (list, current, create, switch)</td></tr>
+            <tr><td><code>/grant path mode ttl</code></td><td>Grant access to a path outside workspace</td></tr>
+            <tr><td><code>/revoke path</code></td><td>Revoke a previously granted path</td></tr>
+            <tr><td><code>/approve_push</code></td><td>Approve a pending git push</td></tr>
+            <tr><td><code>/config</code></td><td>View current bot configuration</td></tr>
+            <tr><td><code>/reset</code></td><td>Reset the agent session</td></tr>
+            <tr><td><code>/help</code></td><td>List all available commands</td></tr>
+            <tr><td><code>/stats</code></td><td>Show uptime, task counts, active sessions</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Quick Start ─────────────────────────────────────────────────────── -->
+  <section class="section" id="quickstart">
+    <div class="reveal">
+      <div class="section-label">Quick Start</div>
+      <h2 class="section-title">Up and running in minutes</h2>
+      <p class="section-desc">Prerequisites: Git, Node.js ≥ 18, npm, and <a href="https://docs.github.com/en/copilot/github-copilot-in-the-cli" target="_blank" rel="noopener">Copilot CLI</a> (authenticated).</p>
+    </div>
+
+    <div class="reveal">
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="linux">Linux / macOS</button>
+        <button class="tab-btn" data-tab="windows">Windows (PowerShell)</button>
+      </div>
+
+      <div class="tab-content active" data-tab="linux">
+        <div class="code-block">
+          <button class="copy-btn" aria-label="Copy code">📋 Copy</button>
+<pre>export DISCORD_TOKEN="your-token"
+export REPO_URL="https://github.com/user/repo.git"
+
+chmod +x agent.sh
+./agent.sh</pre>
+        </div>
+      </div>
+
+      <div class="tab-content" data-tab="windows">
+        <div class="code-block">
+          <button class="copy-btn" aria-label="Copy code">📋 Copy</button>
+<pre>.\agent.ps1
+# Interactive setup wizard
+# Validates tokens, clones repo, starts bot</pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="reveal" style="margin-top: 24px;">
+      <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 12px;">Or create a <code>.env</code> file:</p>
+      <div class="code-block standalone">
+        <button class="copy-btn" aria-label="Copy code">📋 Copy</button>
+<pre>DISCORD_TOKEN=your-bot-token
+REPO_URL=https://github.com/user/repo.git</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Configuration ───────────────────────────────────────────────────── -->
+  <section class="section" id="config">
+    <div class="reveal">
+      <div class="section-label">Configuration</div>
+      <h2 class="section-title">Environment variables</h2>
+      <p class="section-desc">Set via <code>.env</code> file or export directly. Only two are required.</p>
+    </div>
+
+    <div class="reveal">
+      <details open>
+        <summary>Required</summary>
+        <div class="config-body">
+          <table>
+            <thead>
+              <tr><th>Variable</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>DISCORD_TOKEN</code></td><td>Your Discord bot token</td></tr>
+              <tr><td><code>REPO_URL</code></td><td>Repository URL to clone (or set interactively)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details>
+        <summary>Access Control</summary>
+        <div class="config-body">
+          <table>
+            <thead>
+              <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>GITHUB_TOKEN</code></td><td>—</td><td>Fine-grained PAT (Contents r/w, Pull requests r/w)</td></tr>
+              <tr><td><code>ALLOWED_GUILDS</code></td><td>all</td><td>Comma-separated guild IDs</td></tr>
+              <tr><td><code>ALLOWED_CHANNELS</code></td><td>all</td><td>Comma-separated channel IDs</td></tr>
+              <tr><td><code>ADMIN_ROLE_IDS</code></td><td>all</td><td>Comma-separated admin role IDs</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details>
+        <summary>Notifications</summary>
+        <div class="config-body">
+          <table>
+            <thead>
+              <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>STARTUP_CHANNEL_ID</code></td><td>—</td><td>Channel for online/offline/reconnect notifications</td></tr>
+              <tr><td><code>ADMIN_USER_ID</code></td><td>—</td><td>User ID for admin DMs on startup/shutdown</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details>
+        <summary>Limits &amp; Tuning</summary>
+        <div class="config-body">
+          <table>
+            <thead>
+              <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>MAX_QUEUE_SIZE</code></td><td>50</td><td>Maximum queued tasks per session</td></tr>
+              <tr><td><code>MAX_PROMPT_LENGTH</code></td><td>4000</td><td>Maximum prompt length in characters</td></tr>
+              <tr><td><code>TASK_TIMEOUT_MS</code></td><td>1800000</td><td>Task timeout (default: 30 min)</td></tr>
+              <tr><td><code>DISCORD_EDIT_THROTTLE_MS</code></td><td>1500</td><td>Discord message edit throttle interval</td></tr>
+              <tr><td><code>RATE_LIMIT_WINDOW_MS</code></td><td>60000</td><td>Rate limit window per user</td></tr>
+              <tr><td><code>RATE_LIMIT_MAX</code></td><td>10</td><td>Max commands per window (admins exempt)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details>
+        <summary>Paths &amp; Logging</summary>
+        <div class="config-body">
+          <table>
+            <thead>
+              <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>BASE_ROOT</code></td><td><code>~/.local/share/discord-agent</code></td><td>Base directory for all data</td></tr>
+              <tr><td><code>WORKSPACES_ROOT</code></td><td><code>$BASE_ROOT/workspaces</code></td><td>Worktree directory</td></tr>
+              <tr><td><code>LOG_LEVEL</code></td><td>info</td><td>debug / info / warn / error</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <!-- ── Security ────────────────────────────────────────────────────────── -->
+  <section class="section" id="security">
+    <div class="reveal">
+      <div class="section-label">Security</div>
+      <h2 class="section-title">Defense in depth</h2>
+      <p class="section-desc">Multiple layers of protection — from filesystem isolation to secret redaction.</p>
+    </div>
+
+    <div class="security-grid">
+      <div class="security-item reveal">
+        <span class="security-check">✓</span>
+        <div>
+          <h4>Path security</h4>
+          <p><code>fs.realpathSync()</code> prevents symlink traversal attacks</p>
+        </div>
+      </div>
+      <div class="security-item reveal">
+        <span class="security-check">✓</span>
+        <div>
+          <h4>Deny-by-default</h4>
+          <p>All file and shell ops outside workspace blocked without explicit grant</p>
+        </div>
+      </div>
+      <div class="security-item reveal">
+        <span class="security-check">✓</span>
+        <div>
+          <h4>Compound command scanning</h4>
+          <p>Detects <code>git push</code> in <code>&&</code>, <code>||</code>, <code>;</code>, pipes, <code>sh -c</code>, <code>eval</code></p>
+        </div>
+      </div>
+      <div class="security-item reveal">
+        <span class="security-check">✓</span>
+        <div>
+          <h4>cd target validation</h4>
+          <p>Blocks shell <code>cd</code> into paths outside the workspace directory</p>
+        </div>
+      </div>
+      <div class="security-item reveal">
+        <span class="security-check">✓</span>
+        <div>
+          <h4>Push approval gate</h4>
+          <p><code>git push</code>, <code>gh pr create/merge</code> require Discord button approval</p>
+        </div>
+      </div>
+      <div class="security-item reveal">
+        <span class="security-check">✓</span>
+        <div>
+          <h4>Secret scanner</h4>
+          <p>Redacts 9 token patterns before any output reaches Discord</p>
+        </div>
+      </div>
+      <div class="security-item reveal">
+        <span class="security-check">✓</span>
+        <div>
+          <h4>Grant TTL &amp; auto-revoke</h4>
+          <p>Temporary grants with automatic expiration and cleanup</p>
+        </div>
+      </div>
+      <div class="security-item reveal">
+        <span class="security-check">✓</span>
+        <div>
+          <h4>Workspace isolation</h4>
+          <p>Each channel gets its own git worktree — no cross-contamination</p>
+        </div>
+      </div>
+      <div class="security-item reveal">
+        <span class="security-check">✓</span>
+        <div>
+          <h4>RBAC</h4>
+          <p>Admin roles for privileged commands, per-user rate limiting</p>
+        </div>
+      </div>
+      <div class="security-item reveal">
+        <span class="security-check">✓</span>
+        <div>
+          <h4>Branch sanitization</h4>
+          <p>Only <code>[\w./-]</code> allowed, max 100 characters</p>
+        </div>
+      </div>
+      <div class="security-item reveal">
+        <span class="security-check">✓</span>
+        <div>
+          <h4>Session recovery</h4>
+          <p>Grants and sessions restored from SQLite on restart</p>
+        </div>
+      </div>
+      <div class="security-item reveal">
+        <span class="security-check">✓</span>
+        <div>
+          <h4>Graceful shutdown</h4>
+          <p>SIGINT/SIGTERM handlers, DB cleanup, shutdown notifications</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Discord Bot Setup ───────────────────────────────────────────────── -->
+  <section class="section" id="bot-setup">
+    <div class="reveal">
+      <div class="section-label">Bot Setup</div>
+      <h2 class="section-title">Create your Discord bot</h2>
+      <p class="section-desc">Five steps to get your bot running in a Discord server.</p>
+    </div>
+
+    <div class="setup-steps reveal">
+      <div class="setup-step">
+        <div class="setup-step-num">1</div>
+        <div class="setup-step-content">
+          <h4>Create application</h4>
+          <p>Go to the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">Discord Developer Portal</a> → New Application → Bot → copy the token.</p>
+        </div>
+      </div>
+      <div class="setup-step">
+        <div class="setup-step-num">2</div>
+        <div class="setup-step-content">
+          <h4>Enable Message Content Intent</h4>
+          <p>Under Bot settings, enable the <strong>Message Content Intent</strong> toggle.</p>
+        </div>
+      </div>
+      <div class="setup-step">
+        <div class="setup-step-num">3</div>
+        <div class="setup-step-content">
+          <h4>Set permissions</h4>
+          <p><code>Send Messages</code>, <code>Embed Links</code>, <code>Attach Files</code>, <code>Use Slash Commands</code>, <code>Create Public Threads</code>, <code>Send Messages in Threads</code></p>
+        </div>
+      </div>
+      <div class="setup-step">
+        <div class="setup-step-num">4</div>
+        <div class="setup-step-content">
+          <h4>Generate invite URL</h4>
+          <p>OAuth2 → URL Generator → scopes: <code>bot</code>, <code>applications.commands</code> → invite to your server.</p>
+        </div>
+      </div>
+      <div class="setup-step">
+        <div class="setup-step-num">5</div>
+        <div class="setup-step-content">
+          <h4>Run the agent</h4>
+          <p>Set <code>DISCORD_TOKEN</code> and run <code>./agent.sh</code> (Linux/macOS) or <code>.\agent.ps1</code> (Windows).</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Footer ──────────────────────────────────────────────────────────── -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="https://github.com/epantke/remote-coding-agent" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/epantke/remote-coding-agent/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="https://github.com/epantke/remote-coding-agent/issues" target="_blank" rel="noopener">Issues</a>
+        <a href="https://github.com/epantke/remote-coding-agent/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      </div>
+      <p class="footer-disclaimer">
+        This software is provided "as is" without warranty of any kind. It is experimental and grants an AI agent
+        autonomous access to your repository. Use at your own risk. Review all changes before merging.
+      </p>
+    </div>
+  </footer>
+
+  <!-- Scroll to top -->
+  <button class="scroll-top" id="scroll-top" aria-label="Scroll to top">↑</button>
+
+  <script src="script.js"></script>
+</body>
+</html>
