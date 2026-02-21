@@ -1,14 +1,33 @@
 import Database from "better-sqlite3";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, existsSync, copyFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { STATE_DB_PATH } from "./config.mjs";
+import { createLogger } from "./logger.mjs";
+
+const log = createLogger("state");
 
 // Ensure parent directory exists
 mkdirSync(dirname(STATE_DB_PATH), { recursive: true });
 
-const db = new Database(STATE_DB_PATH);
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
+let db;
+try {
+  db = new Database(STATE_DB_PATH);
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+} catch (err) {
+  // Database may be corrupt — back up and recreate
+  log.error("Database open failed, attempting recovery", { error: err.message });
+  if (existsSync(STATE_DB_PATH)) {
+    const backupPath = STATE_DB_PATH + ".corrupt." + Date.now();
+    try {
+      copyFileSync(STATE_DB_PATH, backupPath);
+      log.info("Corrupt DB backed up", { path: backupPath });
+    } catch { /* best effort */ }
+  }
+  db = new Database(STATE_DB_PATH);
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+}
 
 // ── Schema ──────────────────────────────────────────────────────────────────
 
@@ -59,12 +78,31 @@ db.exec(`
 
 // ── Migrations ──────────────────────────────────────────────────────────────
 
+db.exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`);
+
+function getSchemaVersion() {
+  const row = db.prepare("SELECT MAX(version) as v FROM schema_version").get();
+  return row?.v ?? 0;
+}
+
+function setSchemaVersion(v) {
+  db.prepare("INSERT INTO schema_version (version) VALUES (?)").run(v);
+}
+
 function runMigrations() {
-  // Add model column if missing (v3 migration)
-  const cols = db.pragma("table_info(sessions)").map((c) => c.name);
-  if (!cols.includes("model")) {
-    db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`);
+  let v = getSchemaVersion();
+
+  if (v < 1) {
+    // v1: Add model column if missing
+    const cols = db.pragma("table_info(sessions)").map((c) => c.name);
+    if (!cols.includes("model")) {
+      db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`);
+    }
+    setSchemaVersion(1);
+    v = 1;
   }
+
+  // Future migrations go here as `if (v < 2) { ... setSchemaVersion(2); }`
 }
 
 runMigrations();

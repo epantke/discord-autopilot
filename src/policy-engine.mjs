@@ -42,8 +42,9 @@ const GIT_PUSH_PATTERNS = [
   /\bgh\s+pr\s+push\b/i,
 ];
 
-// Dangerous shell wrappers that can hide commands from pattern matching
-const DANGEROUS_WRAPPERS = /\b(?:eval|source)\s/i;
+// Dangerous shell wrappers that can hide commands from pattern matching.
+// Only flag eval/source when followed by content that could contain a push command.
+const DANGEROUS_EVAL_WITH_PUSH = /\b(?:eval|source)\s+.*\b(?:git\s+push|gh\s+pr\s+(?:create|merge|push))\b/i;
 
 // Split compound commands (&&, ||, ;, |, newline) and also unwrap
 // sh -c / bash -c wrappers to detect push in any sub-part.
@@ -84,8 +85,8 @@ function extractSubCommands(command) {
 
 export function isGitPushCommand(command) {
   const parts = extractSubCommands(command);
-  // Also detect dangerous wrappers like eval/source that can hide push commands
-  if (DANGEROUS_WRAPPERS.test(command)) return true;
+  // Detect eval/source wrapping a push command
+  if (DANGEROUS_EVAL_WITH_PUSH.test(command)) return true;
   // Detect env-variable prefix pattern: VAR=val git push
   if (/\b\w+=\S+\s+git\s+push\b/i.test(command)) return true;
   return parts.some((part) =>
@@ -106,7 +107,8 @@ export function isGranted(targetPath, grants, requiredMode = "ro") {
   const resolvedTarget = safePath(targetPath);
   for (const [grantPath, grant] of grants) {
     if (Date.now() > grant.expiry) continue; // expired
-    const resolvedGrant = safePath(grantPath);
+    // Grant paths are already resolved at addGrant() time — use directly
+    const resolvedGrant = grantPath;
     const isUnder =
       resolvedTarget === resolvedGrant ||
       resolvedTarget.startsWith(resolvedGrant + sep);

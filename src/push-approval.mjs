@@ -99,6 +99,12 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
       filter: (i) => {
         if (i.customId !== "push_approve" && i.customId !== "push_reject") return false;
         // RBAC: admins can approve/reject pushes
+        // Deny-by-default: if neither ADMIN_USER_ID nor ADMIN_ROLE_IDS are configured,
+        // nobody is allowed to approve pushes.
+        if (!ADMIN_USER_ID && !ADMIN_ROLE_IDS) {
+          i.reply({ content: "\u26d4 No admin configured — push approval is disabled. Set ADMIN_USER_ID or ADMIN_ROLE_IDS.", flags: MessageFlags.Ephemeral }).catch(() => {});
+          return false;
+        }
         // In DMs (no member/roles), fall back to ADMIN_USER_ID check
         const isAdminUser = ADMIN_USER_ID && i.user.id === ADMIN_USER_ID;
         if (!isAdminUser && ADMIN_ROLE_IDS) {
@@ -107,6 +113,10 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
             i.reply({ content: "\u26d4 You don't have permission to approve/reject pushes.", flags: MessageFlags.Ephemeral }).catch(() => {});
             return false;
           }
+        }
+        if (!isAdminUser && !ADMIN_ROLE_IDS) {
+          i.reply({ content: "\u26d4 You don't have permission to approve/reject pushes.", flags: MessageFlags.Ephemeral }).catch(() => {});
+          return false;
         }
         return true;
       },

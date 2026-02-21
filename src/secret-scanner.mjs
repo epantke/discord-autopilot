@@ -10,9 +10,11 @@ const TOKEN_PATTERNS = [
   { label: "GitHub PAT (fine-grained)", re: /github_pat_[A-Za-z0-9_]{22,}/ },
   { label: "GitHub OAuth", re: /gho_[A-Za-z0-9]{36,}/ },
   { label: "GitHub App token", re: /(?:ghu|ghs|ghr)_[A-Za-z0-9]{36,}/ },
-  { label: "OpenAI API key", re: /sk-(?:proj-)?[A-Za-z0-9]{32,}/ },
+  { label: "OpenAI API key", re: /sk-(?:proj-|svcacct-|None-)?[A-Za-z0-9]{32,}/ },
+  { label: "Anthropic API key", re: /sk-ant-api03-[A-Za-z0-9_-]{80,}/ },
   { label: "AWS Access Key", re: /AKIA[0-9A-Z]{16}/ },
   { label: "Slack token", re: /xox[bprsao]-[0-9A-Za-z-]{10,}/ },
+  { label: "Stripe key", re: /(?:sk|pk|rk)_(?:live|test)_[0-9A-Za-z]{10,}/ },
   { label: "Discord bot token", re: /[MN][A-Za-z\d]{23,}\.[A-Za-z\d_-]{6}\.[A-Za-z\d_-]{27,}/ },
   { label: "Generic secret", re: /(?:secret|token|password|api_key|apikey)\s*[:=]\s*["'][^"']{8,}["']/i },
 ];

@@ -11,6 +11,10 @@ let client = null;
 
 /**
  * Get or create the singleton CopilotClient.
+ *
+ * IMPORTANT: config.mjs must be imported before this module, because this
+ * function deletes GITHUB_TOKEN and DISCORD_TOKEN from process.env.
+ * config.mjs caches those values at import time, so it must run first.
  */
 export function getCopilotClient() {
   if (!client) {

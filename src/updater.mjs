@@ -1,4 +1,6 @@
-import { readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { readFileSync, writeFileSync, chmodSync, renameSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { randomBytes } from "node:crypto";
 import { createLogger } from "./logger.mjs";
 import { CURRENT_VERSION, AGENT_SCRIPT_PATH, GITHUB_TOKEN } from "./config.mjs";
 
@@ -146,11 +148,13 @@ export async function downloadAndApplyUpdate() {
       log.warn("Could not create backup — continuing anyway");
     }
 
-    writeFileSync(AGENT_SCRIPT_PATH, content, "utf-8");
-
+    // Atomic write: write to a temp file first, then rename into place
+    const tmpPath = join(dirname(AGENT_SCRIPT_PATH), `.agent-update-${randomBytes(4).toString("hex")}.tmp`);
+    writeFileSync(tmpPath, content, "utf-8");
     if (!isWindows) {
-      try { chmodSync(AGENT_SCRIPT_PATH, 0o755); } catch { /* ignore */ }
+      try { chmodSync(tmpPath, 0o755); } catch { /* ignore */ }
     }
+    renameSync(tmpPath, AGENT_SCRIPT_PATH);
 
     log.info("Update applied successfully", { version: check.latestVersion });
 

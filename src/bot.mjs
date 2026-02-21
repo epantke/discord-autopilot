@@ -269,8 +269,7 @@ const commands = [
     )
     .addStringOption((opt) =>
       opt.setName("name").setDescription("Model ID to switch to (for set)").setAutocomplete(true)
-    )
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    ),
 ];
 
 // ── Access Control ──────────────────────────────────────────────────────────
@@ -373,22 +372,26 @@ async function registerCommands(clientId) {
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
   const body = commands.map((c) => c.toJSON());
 
-  if (ALLOWED_GUILDS && ALLOWED_GUILDS.size > 0) {
-    // Guild-scoped (instant update)
-    for (const guildId of ALLOWED_GUILDS) {
-      try {
-        await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
-          body,
-        });
-        log.info("Registered slash commands", { guildId });
-      } catch (err) {
-        log.error("Failed to register commands for guild", { guildId, error: err.message });
-      }
+  // Always register guild-scoped commands for instant availability
+  const targetGuilds = ALLOWED_GUILDS && ALLOWED_GUILDS.size > 0
+    ? ALLOWED_GUILDS
+    : client.guilds.cache.map((g) => g.id);
+
+  for (const guildId of targetGuilds) {
+    try {
+      await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body });
+      log.info("Registered slash commands", { guildId });
+    } catch (err) {
+      log.error("Failed to register commands for guild", { guildId, error: err.message });
     }
-  } else {
-    // Global (may take up to 1h to propagate)
+  }
+
+  // Also register globally (for DMs and future guilds the bot joins)
+  try {
     await rest.put(Routes.applicationCommands(clientId), { body });
     log.info("Registered global slash commands");
+  } catch (err) {
+    log.error("Failed to register global commands", { error: err.message });
   }
 }
 
@@ -925,6 +928,25 @@ client.on("interactionCreate", async (interaction) => {
           break;
         }
 
+        // Block grants to sensitive system paths
+        const normalizedGrant = grantPath.replace(/\\/g, "/").toLowerCase();
+        const BLOCKED_PATHS = [
+          "/etc", "/root", "/var", "/boot", "/sbin", "/bin", "/usr",
+          "/proc", "/sys", "/dev",
+          "c:/windows", "c:/program files", "c:/program files (x86)",
+          "c:/programdata", "c:/users/all users",
+        ];
+        const isBlocked = BLOCKED_PATHS.some((bp) =>
+          normalizedGrant === bp || normalizedGrant.startsWith(bp + "/")
+        );
+        if (isBlocked) {
+          await interaction.reply({
+            content: "⛔ Cannot grant access to sensitive system paths.",
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+
         const result = addGrant(channelId, grantPath, mode, ttl);
         await interaction.reply(
           `✅ **Granted** \`${mode}\` access to \`${grantPath}\` for **${ttl} min** (expires <t:${Math.floor(new Date(result.expiresAt).getTime() / 1000)}:R>).`
@@ -951,7 +973,7 @@ client.on("interactionCreate", async (interaction) => {
       // ── /stop ─────────────────────────────────────────────────────────
       case "stop": {
         const clearQ = interaction.options.getBoolean("clear_queue") ?? true;
-        const result = hardStop(channelId, clearQ);
+        const result = await hardStop(channelId, clearQ);
         if (!result.found) {
           await interaction.reply({
             content: "No active session to stop.",
@@ -1415,6 +1437,13 @@ client.on("interactionCreate", async (interaction) => {
         }
 
         if (action === "set") {
+          if (!isAdmin(interaction)) {
+            await interaction.reply({
+              content: "⛔ Only admins can change the model.",
+              flags: MessageFlags.Ephemeral,
+            });
+            break;
+          }
           if (!modelName) {
             await interaction.reply({
               content: "⚠️ Please provide a model ID (`name` option). Use `/model action:list` to see available models.",
@@ -1694,25 +1723,34 @@ client.on("messageCreate", async (message) => {
 async function shutdown(signal) {
   log.info("Shutting down", { signal });
 
-  // Send shutdown notification before destroying the client
+  // Send shutdown notification before destroying the client — with timeout to avoid hanging
   const shutdownEmbed = new EmbedBuilder()
     .setColor(0xe74c3c)
     .setDescription(`\u{1F534} Offline — **${client.user?.tag ?? "Bot"}** (${signal})`);
 
-  let adminNotified = false;
-  if (ADMIN_USER_ID) {
-    try {
-      const user = await client.users.fetch(ADMIN_USER_ID);
-      await user.send({ embeds: [shutdownEmbed] });
-      adminNotified = true;
-    } catch { /* best effort */ }
-  }
-  if (!adminNotified && STARTUP_CHANNEL_ID) {
-    try {
-      const ch = await client.channels.fetch(STARTUP_CHANNEL_ID);
-      if (ch?.isTextBased()) await ch.send({ embeds: [shutdownEmbed] });
-    } catch { /* best effort */ }
-  }
+  const notifyTimeout = new Promise((resolve) => {
+    const t = setTimeout(resolve, 5_000);
+    t.unref();
+  });
+
+  const notifyPromise = (async () => {
+    let adminNotified = false;
+    if (ADMIN_USER_ID) {
+      try {
+        const user = await client.users.fetch(ADMIN_USER_ID);
+        await user.send({ embeds: [shutdownEmbed] });
+        adminNotified = true;
+      } catch { /* best effort */ }
+    }
+    if (!adminNotified && STARTUP_CHANNEL_ID) {
+      try {
+        const ch = await client.channels.fetch(STARTUP_CHANNEL_ID);
+        if (ch?.isTextBased()) await ch.send({ embeds: [shutdownEmbed] });
+      } catch { /* best effort */ }
+    }
+  })();
+
+  await Promise.race([notifyPromise, notifyTimeout]);
 
   try { client.destroy(); } catch (err) { log.error("Client destroy failed", { error: err.message }); }
   try { await stopCopilotClient(); } catch (err) { log.error("Copilot stop failed", { error: err.message }); }

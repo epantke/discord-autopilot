@@ -14,6 +14,10 @@ export class DiscordOutput {
   constructor(channel) {
     this.channel = channel;
     this.content = "";
+    /** Content already scanned and cleaned by redactSecrets */
+    this._cleanedContent = "";
+    /** Raw content not yet scanned */
+    this._pendingContent = "";
     this.dirty = false;
     this.message = null;
     this.lastEdit = 0;
@@ -30,6 +34,7 @@ export class DiscordOutput {
   append(text) {
     if (this.finished) return;
     this.content += text;
+    this._pendingContent += text;
     this.dirty = true;
     this._scheduleEdit();
   }
@@ -56,6 +61,7 @@ export class DiscordOutput {
       this.editTimer = null;
     }
     if (epilogue) {
+      this._pendingContent += `\n${epilogue}`;
       this.content += `\n${epilogue}`;
       this.dirty = true;
     }
@@ -81,11 +87,17 @@ export class DiscordOutput {
     try {
       const footer = this._statusFooter ? `\n${this._statusFooter}` : "";
 
+      // Incrementally scan only newly appended content
+      if (this._pendingContent) {
+        this._cleanedContent += redactSecrets(this._pendingContent).clean;
+        this._pendingContent = "";
+      }
+
       // If permanent content exceeds threshold, split (footer stays with remainder)
-      if (this.content.length > MESSAGE_SPLIT_THRESHOLD && !this.finished) {
-        const splitAt = this._findSplitPoint(this.content, MESSAGE_SPLIT_THRESHOLD);
-        const head = redactSecrets(this.content.slice(0, splitAt)).clean;
-        const tail = this.content.slice(splitAt);
+      if (this._cleanedContent.length > MESSAGE_SPLIT_THRESHOLD && !this.finished) {
+        const splitAt = this._findSplitPoint(this._cleanedContent, MESSAGE_SPLIT_THRESHOLD);
+        const head = this._cleanedContent.slice(0, splitAt);
+        const tail = this._cleanedContent.slice(splitAt);
 
         if (this.message) {
           await this.message.edit(head);
@@ -94,27 +106,28 @@ export class DiscordOutput {
         }
         // Start a new message for the remainder
         this.message = null;
+        this._cleanedContent = tail;
         this.content = tail;
         this.dirty = tail.length > 0 || footer.length > 0;
         if (this.dirty) this._scheduleEdit();
         return;
       }
 
-      const displayText = this.content + footer;
-      const cleaned = redactSecrets(displayText).clean;
-      if (!cleaned) return;
+      const displayText = this._cleanedContent + (footer ? redactSecrets(footer).clean : "");
+      if (!displayText) return;
 
-      if (cleaned.length <= 1990) {
+      if (displayText.length <= 1990) {
         if (this.message) {
-          await this.message.edit(cleaned);
+          await this.message.edit(displayText);
         } else {
-          this.message = await this.channel.send(cleaned);
+          this.message = await this.channel.send(displayText);
         }
       } else {
         // Too large even for finish — send as attachment
-        await this._sendAsAttachment(cleaned);
+        await this._sendAsAttachment(displayText);
         this.message = null;
         this.content = "";
+        this._cleanedContent = "";
         this._statusFooter = "";
       }
     } catch (err) {
@@ -123,12 +136,13 @@ export class DiscordOutput {
         this.message = null;
         try {
           const footer = this._statusFooter ? `\n${this._statusFooter}` : "";
-          const cleaned = redactSecrets(this.content + footer).clean;
-          if (cleaned && cleaned.length <= 1990) {
-            this.message = await this.channel.send(cleaned);
-          } else if (cleaned) {
-            await this._sendAsAttachment(cleaned);
+          const fallback = this._cleanedContent + (footer ? redactSecrets(footer).clean : "");
+          if (fallback && fallback.length <= 1990) {
+            this.message = await this.channel.send(fallback);
+          } else if (fallback) {
+            await this._sendAsAttachment(fallback);
             this.content = "";
+            this._cleanedContent = "";
             this._statusFooter = "";
           }
         } catch {
