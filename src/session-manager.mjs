@@ -169,7 +169,8 @@ function _buildSessionCallbacks(channelId, channel) {
       ctx._lastActivity = Date.now();
       ctx._toolsCompleted = (ctx._toolsCompleted || 0) + 1;
       if (!success && error) {
-        ctx.output?.append(`\n❌ \`${toolName}\`: ${error}\n`);
+        const errMsg = typeof error === "string" ? error : error?.message || String(error);
+        ctx.output?.append(`\n❌ \`${toolName}\`: ${errMsg}\n`);
       }
       const count = ctx._toolsCompleted;
       const icon = success ? "✅" : "❌";
@@ -587,7 +588,7 @@ export function hardStop(channelId, clearQueue = true) {
       completeTask(ctx.taskId, "aborted");
       ctx.taskId = null;
     }
-    ctx.output?.finish("🛑 **Task aborted by user.**");
+    ctx.output?.finish("🛑 **Task aborted by user.**").catch(() => {});
     // Don't null output synchronously — finish() is async and needs the reference
     // It will be nulled by processQueue's finally block
     ctx.status = "idle";
@@ -745,6 +746,14 @@ const _stuckWatchdog = setInterval(() => {
       try { updateSessionStatus(channelId, "idle"); } catch {}
       ctx._lastActivity = now;
       log.info("Stuck session recovered", { channelId });
+      // Kick queue so waiting tasks aren't stranded
+      if (ctx.queue.length > 0) {
+        setImmediate(() => {
+          try { processQueue(channelId, null); } catch (e) {
+            log.error("Queue kick after stuck recovery failed", { channelId, error: e.message });
+          }
+        });
+      }
     }
   }
 }, 60_000); // Check every 60s

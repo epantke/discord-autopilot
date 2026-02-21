@@ -89,6 +89,7 @@ export async function createAgentSession(opts) {
     ...(model ? { model } : {}),
   };
 
+  let creationTimer;
   const session = await Promise.race([
     copilot.createSession({
     ...sessionConfig,
@@ -185,10 +186,11 @@ export async function createAgentSession(opts) {
     },
   }),
     new Promise((_, reject) => {
-      const t = setTimeout(() => reject(new Error("Copilot session creation timed out after 60s")), 60_000);
-      t.unref();
+      creationTimer = setTimeout(() => reject(new Error("Copilot session creation timed out after 60s")), 60_000);
+      creationTimer.unref();
     }),
   ]);
+  clearTimeout(creationTimer);
 
   // Wire up streaming events
   let _lastToolName = "tool";

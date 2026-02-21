@@ -6,17 +6,17 @@ const log = createLogger("secrets");
  * Known secret token patterns — each entry has a label and regex.
  */
 const TOKEN_PATTERNS = [
-  { label: "GitHub PAT (classic)", re: /ghp_[A-Za-z0-9]{36,}/ },
-  { label: "GitHub PAT (fine-grained)", re: /github_pat_[A-Za-z0-9_]{22,}/ },
-  { label: "GitHub OAuth", re: /gho_[A-Za-z0-9]{36,}/ },
-  { label: "GitHub App token", re: /(?:ghu|ghs|ghr)_[A-Za-z0-9]{36,}/ },
-  { label: "OpenAI API key", re: /sk-(?:proj-|svcacct-|None-)?[A-Za-z0-9]{32,}/ },
-  { label: "Anthropic API key", re: /sk-ant-api03-[A-Za-z0-9_-]{80,}/ },
-  { label: "AWS Access Key", re: /AKIA[0-9A-Z]{16}/ },
-  { label: "Slack token", re: /xox[bprsao]-[0-9A-Za-z-]{10,}/ },
-  { label: "Stripe key", re: /(?:sk|pk|rk)_(?:live|test)_[0-9A-Za-z]{10,}/ },
-  { label: "Discord bot token", re: /[MN][A-Za-z\d]{23,}\.[A-Za-z\d_-]{6}\.[A-Za-z\d_-]{27,}/ },
-  { label: "Generic secret", re: /(?:secret|token|password|api_key|apikey)\s*[:=]\s*["'][^"']{8,}["']/i },
+  { label: "GitHub PAT (classic)", re: /ghp_[A-Za-z0-9]{36,}/g },
+  { label: "GitHub PAT (fine-grained)", re: /github_pat_[A-Za-z0-9_]{22,}/g },
+  { label: "GitHub OAuth", re: /gho_[A-Za-z0-9]{36,}/g },
+  { label: "GitHub App token", re: /(?:ghu|ghs|ghr)_[A-Za-z0-9]{36,}/g },
+  { label: "OpenAI API key", re: /sk-(?:proj-|svcacct-|None-)?[A-Za-z0-9]{32,}/g },
+  { label: "Anthropic API key", re: /sk-ant-api03-[A-Za-z0-9_-]{80,}/g },
+  { label: "AWS Access Key", re: /AKIA[0-9A-Z]{16}/g },
+  { label: "Slack token", re: /xox[bprsao]-[0-9A-Za-z-]{10,}/g },
+  { label: "Stripe key", re: /(?:sk|pk|rk)_(?:live|test)_[0-9A-Za-z]{10,}/g },
+  { label: "Discord bot token", re: /[MN][A-Za-z\d]{23,}\.[A-Za-z\d_-]{6}\.[A-Za-z\d_-]{27,}/g },
+  { label: "Generic secret", re: /(?:secret|token|password|api_key|apikey)\s*[:=]\s*["'][^"']{8,}["']/gi },
 ];
 
 /**
@@ -41,8 +41,8 @@ export function redactSecrets(text) {
   const found = [];
 
   for (const { label, re } of TOKEN_PATTERNS) {
-    const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
-    const replaced = clean.replace(global, REDACTED);
+    re.lastIndex = 0;
+    const replaced = clean.replace(re, REDACTED);
     if (replaced !== clean) {
       found.push(label);
       clean = replaced;

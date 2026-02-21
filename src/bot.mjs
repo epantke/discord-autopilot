@@ -264,6 +264,7 @@ function isRateLimited(interaction) {
  * Reuses the same window/max as slash commands.
  */
 function isDmRateLimited(userId) {
+  if (ADMIN_USER_ID && userId === ADMIN_USER_ID) return false;
   const now = Date.now();
   let timestamps = rateLimitMap.get(userId);
   if (!timestamps) {

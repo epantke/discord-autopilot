@@ -97,7 +97,7 @@ export class DiscordOutput {
       }
 
       // If permanent content exceeds threshold, split (footer stays with remainder)
-      while (this._cleanedContent.length > MESSAGE_SPLIT_THRESHOLD && !this.finished) {
+      while (this._cleanedContent.length > MESSAGE_SPLIT_THRESHOLD) {
         const splitAt = this._findSplitPoint(this._cleanedContent, MESSAGE_SPLIT_THRESHOLD);
         const head = this._cleanedContent.slice(0, splitAt);
         this._cleanedContent = this._cleanedContent.slice(splitAt);
@@ -190,10 +190,12 @@ export class DiscordOutput {
     const elapsed = Date.now() - this.lastEdit;
     const delay = Math.max(0, DISCORD_EDIT_THROTTLE_MS - elapsed);
 
-    this.editTimer = setTimeout(async () => {
+    this.editTimer = setTimeout(() => {
       this.editTimer = null;
       this.lastEdit = Date.now();
-      await this.flush();
+      this.flush().catch((err) => {
+        log.error("Scheduled flush failed", { error: err.message });
+      });
     }, delay);
     this.editTimer.unref();
   }
