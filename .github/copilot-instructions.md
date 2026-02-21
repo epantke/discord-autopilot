@@ -1,11 +1,11 @@
 # Project Guidelines — Discord Autopilot
 
-An autonomous AI coding agent controlled via Discord slash commands, powered by the GitHub Copilot SDK. Users submit `/task` commands; the agent edits files, runs tests, creates commits, and streams progress to Discord threads. `git push` always requires human approval via Discord buttons.
+An autonomous AI coding agent controlled via Discord DMs and @mentions, powered by the GitHub Copilot SDK. Users send messages directly; the agent edits files, runs tests, creates commits, and streams progress back in the same channel. `git push` always requires human approval via Discord buttons. A small set of admin-only slash commands (`/stop`, `/reset`, `/model`, `/config`, `/grant`, `/revoke`, `/update`, `/usage`) provide operational control.
 
 ## Tech Stack
 
 - **Runtime**: Node.js ≥ 18, ES Modules (`.mjs`, `"type": "module"`)
-- **Discord**: discord.js v14 — `SlashCommandBuilder`, `EmbedBuilder`, `InteractionReply`
+- **Discord**: discord.js v14 — `SlashCommandBuilder`, `EmbedBuilder`, `MessageCreate`
 - **AI Backend**: `@github/copilot-sdk` — ACP/stdio protocol, `onPreToolUse` policy hook
 - **Database**: better-sqlite3 — WAL mode, prepared statements, schema migrations in `state.mjs`
 - **Build**: `build.mjs` embeds `src/` into standalone `agent.sh` / `agent.ps1` → `dist/`
@@ -22,16 +22,18 @@ An autonomous AI coding agent controlled via Discord slash commands, powered by 
 
 | Module | Responsibility |
 |---|---|
-| `bot.mjs` | Discord client, slash commands, RBAC, rate limiting, interaction handler |
+| `bot.mjs` | Discord client, message handler, admin slash commands, RBAC, rate limiting |
 | `config.mjs` | ENV parsing, Snowflake validation, constants |
 | `copilot-client.mjs` | Copilot SDK singleton, session factory, `onPreToolUse` policy hooks |
-| `session-manager.mjs` | Session lifecycle, git worktrees per channel, task queue (FIFO), pause/resume |
+| `session-manager.mjs` | Session lifecycle, git worktrees per channel, task queue (FIFO), heartbeat status |
 | `policy-engine.mjs` | Path validation (`realpathSync`), workspace boundary checks, git-push detection, grant checking |
 | `grants.mjs` | Grant CRUD, TTL with auto-revoke, in-memory + SQLite dual-store |
 | `state.mjs` | SQLite persistence, schema migrations (v0→v2), prepared statements |
 | `discord-output.mjs` | Streaming output, throttled message edits, chunking, attachment fallback |
 | `push-approval.mjs` | Push gate with embed + buttons, approve/reject, 10 min timeout, RBAC |
 | `secret-scanner.mjs` | Token redaction (9 regex patterns + ENV value detection) |
+| `command-info.mjs` | Slash command definitions and self-awareness prompt fragment |
+| `updater.mjs` | GitHub release checker, auto-update notification |
 | `logger.mjs` | Structured JSON logging to stdout/stderr |
 
 ## Logging

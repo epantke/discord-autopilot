@@ -36,6 +36,11 @@ function safeInt(envVal, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function safeFloat(envVal, fallback) {
+  const n = parseFloat(envVal);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 const DISCORD_EDIT_THROTTLE_MS = safeInt(
   process.env.DISCORD_EDIT_THROTTLE_MS, 1500
 );
@@ -89,6 +94,13 @@ const DEFAULT_MODEL = process.env.DEFAULT_MODEL || "claude-opus-4.6";
 const MAX_QUEUE_SIZE = safeInt(process.env.MAX_QUEUE_SIZE, 50);
 const MAX_PROMPT_LENGTH = safeInt(process.env.MAX_PROMPT_LENGTH, 4000);
 
+// ── Usage / Cost Monitoring ──────────────────────────────────────────────
+const COST_PER_REQUEST_EUR = safeFloat(process.env.COST_PER_REQUEST_EUR, 0.04);
+const COST_PER_1K_INPUT_TOKENS_EUR = safeFloat(process.env.COST_PER_1K_INPUT_TOKENS_EUR, 0.01);
+const COST_PER_1K_OUTPUT_TOKENS_EUR = safeFloat(process.env.COST_PER_1K_OUTPUT_TOKENS_EUR, 0.06);
+const USAGE_ALERT_THRESHOLD_EUR = safeFloat(process.env.USAGE_ALERT_THRESHOLD_EUR, 0);
+const USAGE_ALERT_CHANNEL_ID = validateSnowflake(process.env.USAGE_ALERT_CHANNEL_ID, "USAGE_ALERT_CHANNEL_ID");
+
 // ── Version ─────────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CURRENT_VERSION = (() => {
@@ -130,4 +142,9 @@ export {
   CURRENT_VERSION,
   UPDATE_CHECK_INTERVAL_MS,
   AGENT_SCRIPT_PATH,
+  COST_PER_REQUEST_EUR,
+  COST_PER_1K_INPUT_TOKENS_EUR,
+  COST_PER_1K_OUTPUT_TOKENS_EUR,
+  USAGE_ALERT_THRESHOLD_EUR,
+  USAGE_ALERT_CHANNEL_ID,
 };

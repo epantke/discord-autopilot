@@ -111,7 +111,27 @@ function runMigrations() {
     v = 2;
   }
 
-  // Future migrations go here as `if (v < 3) { ... setSchemaVersion(3); }`
+  if (v < 3) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS usage_log (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id        TEXT NOT NULL,
+        task_id           INTEGER,
+        prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+        completion_tokens INTEGER NOT NULL DEFAULT 0,
+        requests          INTEGER NOT NULL DEFAULT 1,
+        model             TEXT,
+        cost_eur          REAL NOT NULL DEFAULT 0,
+        created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_usage_log_created ON usage_log(created_at)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_usage_log_channel ON usage_log(channel_id)`);
+    setSchemaVersion(3);
+    v = 3;
+  }
+
+  // Future migrations go here as `if (v < 4) { ... setSchemaVersion(4); }`
 }
 
 runMigrations();
@@ -322,6 +342,72 @@ const stmtPruneOldTasks = db.prepare(
 /** Remove task_history entries older than 90 days. */
 export function pruneOldTasks() {
   return stmtPruneOldTasks.run().changes;
+}
+
+// ── Usage Log ───────────────────────────────────────────────────────────────
+const stmtInsertUsage = db.prepare(`
+  INSERT INTO usage_log (channel_id, task_id, prompt_tokens, completion_tokens, requests, model, cost_eur)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+`);
+
+const stmtUsageSince = db.prepare(`
+  SELECT COALESCE(SUM(requests), 0) AS requests,
+         COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+         COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+         COALESCE(SUM(cost_eur), 0) AS cost_eur
+  FROM usage_log WHERE created_at >= datetime('now', ?)
+`);
+
+const stmtUsageTotal = db.prepare(`
+  SELECT COALESCE(SUM(requests), 0) AS requests,
+         COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+         COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+         COALESCE(SUM(cost_eur), 0) AS cost_eur
+  FROM usage_log
+`);
+
+const stmtUsageByChannel = db.prepare(`
+  SELECT channel_id,
+         COALESCE(SUM(requests), 0) AS requests,
+         COALESCE(SUM(cost_eur), 0) AS cost_eur
+  FROM usage_log WHERE created_at >= datetime('now', ?)
+  GROUP BY channel_id ORDER BY cost_eur DESC LIMIT 10
+`);
+
+const stmtUsageByChannelTotal = db.prepare(`
+  SELECT channel_id,
+         COALESCE(SUM(requests), 0) AS requests,
+         COALESCE(SUM(cost_eur), 0) AS cost_eur
+  FROM usage_log
+  GROUP BY channel_id ORDER BY cost_eur DESC LIMIT 10
+`);
+
+const stmtPruneOldUsage = db.prepare(
+  `DELETE FROM usage_log WHERE created_at < datetime('now', '-90 days')`
+);
+
+export function insertUsage(channelId, taskId, promptTokens, completionTokens, requests, model, costEur) {
+  stmtInsertUsage.run(channelId, taskId, promptTokens, completionTokens, requests, model, costEur);
+}
+
+export function getUsageSince(modifier) {
+  return stmtUsageSince.get(modifier);
+}
+
+export function getUsageTotal() {
+  return stmtUsageTotal.get();
+}
+
+export function getUsageByChannel(modifier) {
+  return stmtUsageByChannel.all(modifier);
+}
+
+export function getUsageByChannelTotal() {
+  return stmtUsageByChannelTotal.all();
+}
+
+export function pruneOldUsage() {
+  return stmtPruneOldUsage.run().changes;
 }
 
 let dbClosed = false;
