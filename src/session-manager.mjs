@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, DEFAULT_MODEL } from "./config.mjs";
 import {
   upsertSession,
   getSession,
+  getAllSessions,
   updateSessionStatus,
   updateSessionModel,
   deleteSession as dbDeleteSession,
@@ -367,14 +368,14 @@ async function processQueue(channelId) {
   if (!ctx || ctx.status === "working" || ctx.paused) return;
   if (ctx.queue.length === 0) return;
 
-  const { prompt, resolve, reject, outputChannel } = ctx.queue.shift();
+  const { prompt, resolve, reject, outputChannel, userId } = ctx.queue.shift();
 
   ctx.status = "working";
   ctx.currentPrompt = prompt;
   ctx._toolsCompleted = 0;
   updateSessionStatus(channelId, "working");
   ctx.output = new DiscordOutput(outputChannel);
-  ctx.taskId = insertTask(channelId, prompt);
+  ctx.taskId = insertTask(channelId, prompt, userId, TASK_TIMEOUT_MS);
   log.info("Task started", { channelId, taskId: ctx.taskId, prompt: prompt.slice(0, 100) });
 
   // Typing indicator while agent is working
@@ -648,6 +649,46 @@ export function isAwaitingQuestion(channelId) {
 }
 
 // ── Idle Session Sweep & Task Pruning ───────────────────────────────────────
+
+// ── Orphaned Worktree Cleanup ───────────────────────────────────────────────
+
+/**
+ * Remove worktrees on disk that have no matching DB session.
+ * Call once at startup to reclaim disk space after hard crashes.
+ */
+export async function cleanupOrphanedWorktrees() {
+  const wsRoot = join(WORKSPACES_ROOT, PROJECT_NAME);
+  if (!existsSync(wsRoot)) return 0;
+
+  const knownChannels = new Set(getAllSessions().map((s) => s.channel_id));
+  let removed = 0;
+
+  let entries;
+  try {
+    entries = readdirSync(wsRoot, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (knownChannels.has(entry.name)) continue;
+
+    const worktreePath = join(wsRoot, entry.name);
+    try {
+      await execFileAsync("git", ["worktree", "remove", "--force", worktreePath], {
+        cwd: REPO_PATH, timeout: 15_000,
+      });
+      removed++;
+      log.info("Removed orphaned worktree", { path: worktreePath });
+    } catch (err) {
+      log.warn("Failed to remove orphaned worktree", { path: worktreePath, error: err.message });
+    }
+  }
+
+  if (removed > 0) log.info("Orphaned worktree cleanup complete", { removed });
+  return removed;
+}
 
 const IDLE_SWEEP_MS = 24 * 60 * 60_000; // 24 hours
 const _idleSweep = setInterval(() => {

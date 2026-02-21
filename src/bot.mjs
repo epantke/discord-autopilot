@@ -57,6 +57,7 @@ import {
   updateBranch,
   changeModel,
   listAvailableModels,
+  cleanupOrphanedWorktrees,
 } from "./session-manager.mjs";
 
 import { addGrant, revokeGrant, startGrantCleanup, restoreGrants } from "./grants.mjs";
@@ -319,10 +320,10 @@ function hasAnyRole(member, roleIds) {
 const rateLimitMap = new Map();
 
 /**
- * Returns true if the user is rate-limited. Admins bypass rate limits.
+ * Returns remaining cooldown in ms if the user is rate-limited, or 0 if not.
  */
 function isRateLimited(interaction) {
-  if (isAdmin(interaction)) return false;
+  if (isAdmin(interaction)) return 0;
   const userId = interaction.user.id;
   const now = Date.now();
   let timestamps = rateLimitMap.get(userId);
@@ -333,14 +334,15 @@ function isRateLimited(interaction) {
   // Remove entries outside the window
   const cutoff = now - RATE_LIMIT_WINDOW_MS;
   while (timestamps.length > 0 && timestamps[0] <= cutoff) timestamps.shift();
-  if (timestamps.length >= RATE_LIMIT_MAX) return true;
+  if (timestamps.length >= RATE_LIMIT_MAX) {
+    return timestamps[0] + RATE_LIMIT_WINDOW_MS - now;
+  }
   timestamps.push(now);
-  return false;
+  return 0;
 }
 
 /**
- * Lightweight rate-limiter for messageCreate follow-ups (DMs + threads).
- * Reuses the same window/max as slash commands.
+ * Returns remaining cooldown in ms if the user is rate-limited, or 0 if not.
  */
 function isDmRateLimited(userId) {
   const now = Date.now();
@@ -351,9 +353,11 @@ function isDmRateLimited(userId) {
   }
   const cutoff = now - RATE_LIMIT_WINDOW_MS;
   while (timestamps.length > 0 && timestamps[0] <= cutoff) timestamps.shift();
-  if (timestamps.length >= RATE_LIMIT_MAX) return true;
+  if (timestamps.length >= RATE_LIMIT_MAX) {
+    return timestamps[0] + RATE_LIMIT_WINDOW_MS - now;
+  }
   timestamps.push(now);
-  return false;
+  return 0;
 }
 
 // Periodic cleanup of stale rate-limit entries
@@ -422,6 +426,14 @@ client.once(Events.ClientReady, async () => {
   }
 
   log.info("Bot ready", { project: PROJECT_NAME });
+
+  // ── Orphaned Worktree Cleanup ──────────────────────────────────────────
+  try {
+    const removed = await cleanupOrphanedWorktrees();
+    if (removed > 0) log.info("Cleaned up orphaned worktrees at startup", { removed });
+  } catch (err) {
+    log.warn("Worktree cleanup failed", { error: err.message });
+  }
 
   // ── Environment Validation & Crash Recovery ─────────────────────────────
   const envIssues = await validateEnvironment();
@@ -816,9 +828,11 @@ client.on("interactionCreate", async (interaction) => {
     return;
   }
 
-  if (isRateLimited(interaction)) {
+  const cooldown = isRateLimited(interaction);
+  if (cooldown > 0) {
+    const waitSec = Math.ceil(cooldown / 1000);
     await interaction.reply({
-      content: `⏳ Rate limited — max ${RATE_LIMIT_MAX} commands per ${Math.round(RATE_LIMIT_WINDOW_MS / 1000)}s. Please wait.`,
+      content: `⏳ Rate limited — please wait **${waitSec}s** before the next command.`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -1663,7 +1677,7 @@ client.on("messageCreate", async (message) => {
     if (!prompt) return;
 
     // Rate-limit DM follow-ups (reuse interaction rate-limiter)
-    if (isDmRateLimited(message.author.id)) {
+    if (isDmRateLimited(message.author.id) > 0) {
       message.react("⏳").catch(() => {});
       return;
     }
@@ -1702,7 +1716,7 @@ client.on("messageCreate", async (message) => {
   if (!prompt) return;
 
   // Rate-limit thread follow-ups
-  if (isDmRateLimited(message.author.id)) {
+  if (isDmRateLimited(message.author.id) > 0) {
     message.react("⏳").catch(() => {});
     return;
   }

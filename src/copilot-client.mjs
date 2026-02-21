@@ -1,6 +1,7 @@
 import { CopilotClient } from "@github/copilot-sdk";
 import { evaluateToolUse } from "./policy-engine.mjs";
 import { getActiveGrants } from "./grants.mjs";
+import { buildSelfAwarenessPrompt } from "./command-info.mjs";
 import { createLogger } from "./logger.mjs";
 
 const log = createLogger("copilot");
@@ -61,6 +62,9 @@ export function getCopilotClient() {
  * @param {function} opts.onIdle - Called when agent finishes
  * @param {function} opts.onUserQuestion - Called when agent asks a question
  * @param {string|null} [opts.model] - Model ID to use (null = SDK default)
+ * @param {object} [opts.botInfo] - Self-awareness info for the system prompt
+ * @param {string} [opts.botInfo.botName] - Bot display name
+ * @param {string} [opts.botInfo.branch] - Current git branch
  */
 export async function createAgentSession(opts) {
   const {
@@ -74,6 +78,7 @@ export async function createAgentSession(opts) {
     onIdle,
     onUserQuestion,
     model,
+    botInfo,
   } = opts;
 
   const copilot = getCopilotClient();
@@ -159,17 +164,23 @@ export async function createAgentSession(opts) {
     },
 
     systemMessage: {
-      content: [
-        `You are an autonomous coding agent working in: ${workspacePath}`,
-        "You may freely edit files, run tests, lint, build, and create git branches/commits within the workspace.",
-        "IMPORTANT RULES:",
-        "1. You CANNOT git push or publish PRs without explicit user approval — the system will block it.",
-        "2. You CANNOT access files outside the workspace directory without explicit grants.",
-        "3. If a push is denied, inform the user and stop retrying.",
-        "4. If file access outside the workspace is denied, tell the user which path you need and ask them to use /grant.",
-        "5. Always run tests before suggesting a push.",
-        "6. Provide clear summaries of what you changed and why.",
-      ].join("\n"),
+      content: botInfo
+        ? buildSelfAwarenessPrompt({
+            botName: botInfo.botName || "Autopilot",
+            workspacePath,
+            branch: botInfo.branch || "(unknown)",
+          })
+        : [
+            `You are an autonomous coding agent working in: ${workspacePath}`,
+            "You may freely edit files, run tests, lint, build, and create git branches/commits within the workspace.",
+            "IMPORTANT RULES:",
+            "1. You CANNOT git push or publish PRs without explicit user approval — the system will block it.",
+            "2. You CANNOT access files outside the workspace directory without explicit grants.",
+            "3. If a push is denied, inform the user and stop retrying.",
+            "4. If file access outside the workspace is denied, tell the user which path you need and ask them to use /grant.",
+            "5. Always run tests before suggesting a push.",
+            "6. Provide clear summaries of what you changed and why.",
+          ].join("\n"),
     },
   });
 

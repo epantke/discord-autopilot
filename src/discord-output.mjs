@@ -94,23 +94,18 @@ export class DiscordOutput {
       }
 
       // If permanent content exceeds threshold, split (footer stays with remainder)
-      if (this._cleanedContent.length > MESSAGE_SPLIT_THRESHOLD && !this.finished) {
+      while (this._cleanedContent.length > MESSAGE_SPLIT_THRESHOLD && !this.finished) {
         const splitAt = this._findSplitPoint(this._cleanedContent, MESSAGE_SPLIT_THRESHOLD);
         const head = this._cleanedContent.slice(0, splitAt);
-        const tail = this._cleanedContent.slice(splitAt);
+        this._cleanedContent = this._cleanedContent.slice(splitAt);
+        this.content = this._cleanedContent;
 
         if (this.message) {
           await this.message.edit(head);
         } else {
           await this.channel.send(head);
         }
-        // Start a new message for the remainder
         this.message = null;
-        this._cleanedContent = tail;
-        this.content = tail;
-        this.dirty = tail.length > 0 || footer.length > 0;
-        if (this.dirty) this._scheduleEdit();
-        return;
       }
 
       const displayText = this._cleanedContent + (footer ? redactSecrets(footer).clean : "");

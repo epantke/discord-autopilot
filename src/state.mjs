@@ -102,7 +102,16 @@ function runMigrations() {
     v = 1;
   }
 
-  // Future migrations go here as `if (v < 2) { ... setSchemaVersion(2); }`
+  if (v < 2) {
+    const cols = db.pragma("table_info(task_history)").map((c) => c.name);
+    if (!cols.includes("user_id")) {
+      db.exec(`ALTER TABLE task_history ADD COLUMN user_id TEXT`);
+    }
+    setSchemaVersion(2);
+    v = 2;
+  }
+
+  // Future migrations go here as `if (v < 3) { ... setSchemaVersion(3); }`
 }
 
 runMigrations();
@@ -241,8 +250,8 @@ export function deleteRespondersByChannel(channelId) {
 
 // ── Task History ────────────────────────────────────────────────────────────
 const stmtInsertTask = db.prepare(`
-  INSERT INTO task_history (channel_id, prompt, status)
-  VALUES (?, ?, 'running')
+  INSERT INTO task_history (channel_id, prompt, status, user_id, timeout_ms)
+  VALUES (?, ?, 'running', ?, ?)
 `);
 
 const stmtCompleteTask = db.prepare(`
@@ -255,8 +264,8 @@ const stmtTaskHistory = db.prepare(`
   ORDER BY started_at DESC LIMIT ?
 `);
 
-export function insertTask(channelId, prompt) {
-  const info = stmtInsertTask.run(channelId, prompt);
+export function insertTask(channelId, prompt, userId = null, timeoutMs = null) {
+  const info = stmtInsertTask.run(channelId, prompt, userId, timeoutMs);
   return info.lastInsertRowid;
 }
 

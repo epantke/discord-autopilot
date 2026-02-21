@@ -77,6 +77,11 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN || null;
 const STARTUP_CHANNEL_ID = validateSnowflake(process.env.STARTUP_CHANNEL_ID, "STARTUP_CHANNEL_ID");
 const ADMIN_USER_ID = validateSnowflake(process.env.ADMIN_USER_ID, "ADMIN_USER_ID");
 
+// ── DM Access Control ───────────────────────────────────────────────────────
+// CSV of user Snowflake IDs allowed to interact via DMs (in addition to ADMIN_USER_ID).
+// null = only ADMIN_USER_ID may use DMs (backwards-compatible).
+const ALLOWED_DM_USERS = csvToValidatedSet(process.env.ALLOWED_DM_USERS, "ALLOWED_DM_USERS");
+
 // ── Model ───────────────────────────────────────────────────────────────────
 const DEFAULT_MODEL = process.env.DEFAULT_MODEL || "claude-opus-4.6";
 
@@ -111,6 +116,7 @@ export {
   ALLOWED_GUILDS,
   ALLOWED_CHANNELS,
   ADMIN_ROLE_IDS,
+  ALLOWED_DM_USERS,
   DISCORD_EDIT_THROTTLE_MS,
   DEFAULT_GRANT_MODE,
   DEFAULT_GRANT_TTL_MIN,
