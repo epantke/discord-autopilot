@@ -84,6 +84,74 @@ fi
 ok "DISCORD_TOKEN is set"
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Credential & access validation
+# ──────────────────────────────────────────────────────────────────────────────
+VALIDATION_FAILED=false
+
+# Discord token validation
+if command -v curl >/dev/null 2>&1; then
+  DISCORD_HTTP=$(curl -s -o /tmp/.discord_check -w "%{http_code}" \
+    -H "Authorization: Bot $DISCORD_TOKEN" \
+    "https://discord.com/api/v10/users/@me" --max-time 10 2>/dev/null)
+  if [[ "$DISCORD_HTTP" == "200" ]]; then
+    DISCORD_USER=$(grep -o '"username":"[^"]*"' /tmp/.discord_check | head -1 | cut -d'"' -f4)
+    ok "Discord bot: $DISCORD_USER"
+  elif [[ "$DISCORD_HTTP" == "401" ]]; then
+    VALIDATION_FAILED=true
+    echo -e "${RED}[FAIL]${NC} Discord token invalid (401 Unauthorized)"
+    echo "       Regenerate at: https://discord.com/developers/applications"
+  else
+    warn "Discord API returned HTTP $DISCORD_HTTP (network issue?). Continuing..."
+  fi
+  rm -f /tmp/.discord_check
+else
+  warn "curl not found — skipping Discord token validation"
+fi
+
+# GitHub token validation (if set)
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  if command -v curl >/dev/null 2>&1; then
+    GH_HEADERS=$(curl -s -D - -o /tmp/.gh_check \
+      -H "Authorization: token $GITHUB_TOKEN" \
+      -H "User-Agent: discord-copilot-agent/1.0" \
+      "https://api.github.com/user" --max-time 10 2>/dev/null)
+    GH_HTTP=$(echo "$GH_HEADERS" | head -1 | grep -o '[0-9]\{3\}')
+    if [[ "$GH_HTTP" == "200" ]]; then
+      GH_USER=$(grep -o '"login":"[^"]*"' /tmp/.gh_check | head -1 | cut -d'"' -f4)
+      GH_SCOPES=$(echo "$GH_HEADERS" | grep -i '^x-oauth-scopes:' | cut -d: -f2- | xargs)
+      if echo "$GH_SCOPES" | grep -qw "repo"; then
+        ok "GitHub token: $GH_USER (repo scope OK)"
+      else
+        warn "GitHub token: $GH_USER (missing 'repo' scope, current: $GH_SCOPES)"
+        warn "  Private repos and push may not work without 'repo' scope."
+      fi
+    elif [[ "$GH_HTTP" == "401" ]]; then
+      warn "GitHub token invalid (401). Create a new one: https://github.com/settings/tokens"
+    else
+      warn "GitHub API returned HTTP $GH_HTTP. Continuing..."
+    fi
+    rm -f /tmp/.gh_check
+  fi
+else
+  info "GITHUB_TOKEN not set (optional)"
+fi
+
+# Repo URL accessibility
+if git ls-remote --exit-code "$REPO_URL" HEAD >/dev/null 2>&1; then
+  ok "Repository: reachable"
+else
+  warn "Repository unreachable via git ls-remote. Clone step may fail."
+  warn "  Check URL, SSH keys, or network connectivity."
+fi
+
+if [[ "$VALIDATION_FAILED" == "true" ]]; then
+  echo ""
+  die "Credential validation failed. Fix the issues above and re-run."
+fi
+
+ok "All credentials validated"
+
+# ──────────────────────────────────────────────────────────────────────────────
 # 3) Derive project name & paths
 # ──────────────────────────────────────────────────────────────────────────────
 PROJECT_NAME=$(basename "$REPO_URL" .git)

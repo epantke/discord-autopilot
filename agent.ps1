@@ -146,13 +146,13 @@ $cfgGH    = $env:GITHUB_TOKEN
 $needSetup = (-not $cfgToken) -or (-not $cfgRepo)
 
 if ($needSetup) {
-    Write-Step 1 7 'Configuration'
+    Write-Step 1 8 'Configuration'
     Write-Host '  Some required settings are missing. Let''s configure them.' -ForegroundColor DarkGray
     Write-Host '  Values from ' -ForegroundColor DarkGray -NoNewline
     Write-Host '.env' -ForegroundColor Cyan -NoNewline
     Write-Host ' and environment variables are used automatically.' -ForegroundColor DarkGray
 } else {
-    Write-Step 1 7 'Configuration'
+    Write-Step 1 8 'Configuration'
     Write-Ok 'All values loaded (DISCORD_TOKEN, REPO_URL)'
 }
 
@@ -291,7 +291,7 @@ Write-Host ''
 # 2) Prerequisite checks
 # ──────────────────────────────────────────────────────────────────────────────
 
-Write-Step 2 7 'Prerequisites'
+Write-Step 2 8 'Prerequisites'
 
 $Missing = @()
 
@@ -368,10 +368,121 @@ if ($CopilotCmd) {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3) Derive project name & paths
+# 3) Credential & access validation
 # ──────────────────────────────────────────────────────────────────────────────
 
-Write-Step 3 7 'Paths'
+Write-Step 3 8 'Validation'
+
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+
+$script:validationOk = $true
+
+Write-Host "       $([char]0x250C)$(([string][char]0x2500) * 44)" -ForegroundColor DarkGray
+
+# ── Discord Token ──
+$discordBotToken = [Environment]::GetEnvironmentVariable('DISCORD_TOKEN','Process')
+try {
+    $discordHeaders = @{ Authorization = "Bot $discordBotToken" }
+    $discordUser = Invoke-RestMethod -Uri 'https://discord.com/api/v10/users/@me' -Headers $discordHeaders -TimeoutSec 10 -ErrorAction Stop
+    $botName = $discordUser.username
+    if ($discordUser.discriminator -and $discordUser.discriminator -ne '0') {
+        $botName = "$botName#$($discordUser.discriminator)"
+    }
+    Write-Check 'Discord Bot' $botName $true
+} catch {
+    $discordStatus = $null
+    if ($_.Exception.Response) {
+        try { $discordStatus = [int]$_.Exception.Response.StatusCode } catch {}
+    }
+    if ($discordStatus -eq 401) {
+        Write-Check 'Discord Bot' 'Invalid token (401 Unauthorized)' $false
+        $script:validationOk = $false
+    } else {
+        $errMsg = $_.Exception.Message
+        if ($errMsg.Length -gt 60) { $errMsg = $errMsg.Substring(0, 57) + '...' }
+        Write-Check 'Discord Bot' "API unreachable ($errMsg)" $false
+        Write-Warn '  Network issue? Bot may still work if the API is temporarily down.'
+    }
+}
+
+# ── GitHub Token (if set) ──
+$ghToken = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN','Process')
+if ($ghToken) {
+    try {
+        $ghHeaders = @{
+            Authorization = "token $ghToken"
+            'User-Agent'  = 'discord-copilot-agent/1.0'
+        }
+        $ghResponse = Invoke-WebRequest -Uri 'https://api.github.com/user' -Headers $ghHeaders -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop
+        $ghUser = ($ghResponse.Content | ConvertFrom-Json).login
+        $scopeHeader = $ghResponse.Headers['X-OAuth-Scopes']
+        if ($scopeHeader -is [array]) { $scopes = $scopeHeader[0] } else { $scopes = [string]$scopeHeader }
+        $hasRepoScope = $scopes -match '\brepo\b'
+        if ($hasRepoScope) {
+            Write-Check 'GitHub Token' "$ghUser (repo scope $([char]0x2714))" $true
+        } else {
+            Write-Check 'GitHub Token' "$ghUser (missing 'repo' scope)" $false
+            Write-Warn "  Current scopes: $scopes"
+            Write-Warn "  Private repos and push may not work without 'repo' scope."
+        }
+    } catch {
+        $ghStatus = $null
+        if ($_.Exception.Response) {
+            try { $ghStatus = [int]$_.Exception.Response.StatusCode } catch {}
+        }
+        if ($ghStatus -eq 401) {
+            Write-Check 'GitHub Token' 'Invalid token (401 Unauthorized)' $false
+            Write-Warn '  Create a new token: https://github.com/settings/tokens'
+        } else {
+            $ghErr = $_.Exception.Message
+            if ($ghErr.Length -gt 60) { $ghErr = $ghErr.Substring(0, 57) + '...' }
+            Write-Check 'GitHub Token' "API error ($ghErr)" $false
+            Write-Warn '  Network issue? Continuing without validation.'
+        }
+    }
+} else {
+    Write-Check 'GitHub Token' 'not set (optional)' $true
+}
+
+# ── Repository URL accessibility ──
+try {
+    $lsOutput = & git ls-remote --exit-code $RepoUrl HEAD 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'Repo Access' 'reachable' $true
+    } else {
+        $lsErr = ($lsOutput | Out-String).Trim()
+        if ($lsErr.Length -gt 60) { $lsErr = $lsErr.Substring(0, 57) + '...' }
+        Write-Check 'Repo Access' "unreachable ($lsErr)" $false
+        Write-Warn '  Check URL, SSH keys, or network. Clone step may fail.'
+    }
+} catch {
+    Write-Check 'Repo Access' "error: $($_.Exception.Message)" $false
+    Write-Warn '  git ls-remote failed. Clone step may fail.'
+}
+
+Write-Host "       $([char]0x2514)$(([string][char]0x2500) * 44)" -ForegroundColor DarkGray
+
+if (-not $script:validationOk) {
+    Write-Host ''
+    Write-Host '  ' -NoNewline
+    Write-Host ' VALIDATION FAILED ' -ForegroundColor Black -BackgroundColor Red
+    Write-Host ''
+    Write-Host '  Fix the issues above and re-run the script.' -ForegroundColor Yellow
+    Write-Host '  Discord token: ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'https://discord.com/developers/applications' -ForegroundColor Cyan
+    Write-Host '  GitHub token:  ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'https://github.com/settings/tokens' -ForegroundColor Cyan
+    Write-Host ''
+    exit 1
+} else {
+    Write-Ok 'All credentials validated'
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 4) Derive project name & paths
+# ──────────────────────────────────────────────────────────────────────────────
+
+Write-Step 4 8 'Paths'
 
 $ProjectName = [System.IO.Path]::GetFileNameWithoutExtension($RepoUrl) -replace '\.git$', ''
 $ProjectName = $ProjectName.Split('/')[-1]
@@ -402,10 +513,10 @@ foreach ($dir in @($Repos, (Join-Path $App 'src'), $Workspaces)) {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 4) Clone or update repo
+# 5) Clone or update repo
 # ──────────────────────────────────────────────────────────────────────────────
 
-Write-Step 4 7 'Repository'
+Write-Step 5 8 'Repository'
 
 if (Test-Path (Join-Path $RepoDir '.git')) {
     Write-Info 'Updating existing repo...'
@@ -419,10 +530,10 @@ if (Test-Path (Join-Path $RepoDir '.git')) {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 5) Write application files
+# 6) Write application files
 # ──────────────────────────────────────────────────────────────────────────────
 
-Write-Step 5 7 'Source files'
+Write-Step 6 8 'Source files'
 
 # Helper: write UTF-8 without BOM (Node.js expects this)
 function Write-Utf8File {
@@ -1926,10 +2037,10 @@ client.login(DISCORD_TOKEN).catch((err) => {
 Write-Ok '12 source files written'
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 6) Install dependencies
+# 7) Install dependencies
 # ──────────────────────────────────────────────────────────────────────────────
 
-Write-Step 6 7 'Dependencies'
+Write-Step 7 8 'Dependencies'
 
 Write-Info 'Running npm install ...'
 Push-Location $App
@@ -1946,10 +2057,10 @@ try {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 7) Launch
+# 8) Launch
 # ──────────────────────────────────────────────────────────────────────────────
 
-Write-Step 7 7 'Launch'
+Write-Step 8 8 'Launch'
 
 $elapsed = '{0:mm\:ss}' -f ((Get-Date) - $script:StartTime)
 
