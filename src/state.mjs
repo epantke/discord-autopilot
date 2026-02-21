@@ -297,6 +297,19 @@ export function getTaskHistory(channelId, limit = 10) {
   return stmtTaskHistory.all(channelId, limit);
 }
 
+const stmtTaskStats = db.prepare(`
+  SELECT
+    COUNT(*) AS total,
+    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+    SUM(CASE WHEN status = 'aborted' THEN 1 ELSE 0 END) AS aborted
+  FROM task_history
+`);
+
+export function getTaskStats() {
+  return stmtTaskStats.get();
+}
+
 // ── Stale state recovery ────────────────────────────────────────────────────
 const stmtStaleSessions = db.prepare(
   `SELECT channel_id, project_name, branch FROM sessions WHERE status = 'working'`
