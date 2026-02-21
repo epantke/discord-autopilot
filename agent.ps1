@@ -801,8 +801,12 @@ function Copy-Utf8File {
     [System.IO.File]::WriteAllText($Dest, $content, (New-Object System.Text.UTF8Encoding $false))
 }
 
-# Copy package.json
+# Copy package.json + package-lock.json
 Copy-Utf8File (Join-Path $ScriptDir 'src\package.json') (Join-Path $App 'package.json')
+$lockSrc = Join-Path $ScriptDir 'src\package-lock.json'
+if (Test-Path $lockSrc) {
+    Copy-Utf8File $lockSrc (Join-Path $App 'package-lock.json')
+}
 Write-FileProgress 'package.json' 1 12
 
 # Copy all source files

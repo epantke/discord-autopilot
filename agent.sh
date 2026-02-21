@@ -306,6 +306,7 @@ fi
 
 mkdir -p "$APP/src"
 cp "$SCRIPT_DIR/src/package.json" "$APP/package.json"
+[[ -f "$SCRIPT_DIR/src/package-lock.json" ]] && cp "$SCRIPT_DIR/src/package-lock.json" "$APP/package-lock.json"
 for f in "$SRC_DIR"/*.mjs; do
   cp "$f" "$APP/src/$(basename "$f")"
 done

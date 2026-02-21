@@ -8,7 +8,7 @@
  * Usage: node build.mjs
  */
 
-import { readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,12 +28,21 @@ const srcFiles = readdirSync(srcDir).filter((f) => f.endsWith(".mjs")).sort();
 
 const sources = [
   { name: "package.json", subdir: false, content: pkgJsonContent },
+];
+
+// Include package-lock.json if it exists
+const lockPath = join(srcDir, "package-lock.json");
+if (existsSync(lockPath)) {
+  sources.push({ name: "package-lock.json", subdir: false, content: readNormalized(lockPath) });
+}
+
+sources.push(
   ...srcFiles.map((f) => ({
     name: f,
     subdir: true,
     content: readNormalized(join(srcDir, f)),
   })),
-];
+);
 
 const total = sources.length;
 console.log(`Collected ${total} files (package.json + ${srcFiles.length} source files)`);
