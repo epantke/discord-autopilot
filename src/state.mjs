@@ -216,6 +216,22 @@ export function getTaskHistory(channelId, limit = 10) {
   return stmtTaskHistory.all(channelId, limit);
 }
 
+// ── Stats ───────────────────────────────────────────────────────────────────
+
+const stmtTaskStats = db.prepare(`
+  SELECT status, COUNT(*) as count FROM task_history GROUP BY status
+`);
+
+export function getTaskStats() {
+  const rows = stmtTaskStats.all();
+  const stats = { total: 0, completed: 0, failed: 0, aborted: 0, running: 0 };
+  for (const row of rows) {
+    stats[row.status] = row.count;
+    stats.total += row.count;
+  }
+  return stats;
+}
+
 // ── Cleanup ─────────────────────────────────────────────────────────────────
 export function purgeExpiredGrants() {
   return deleteExpiredGrants().changes;

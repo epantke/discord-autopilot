@@ -1,8 +1,10 @@
 import {
+  ActivityType,
   Client,
   Events,
   GatewayIntentBits,
   Partials,
+  PermissionFlagsBits,
   REST,
   Routes,
   SlashCommandBuilder,
@@ -39,10 +41,11 @@ import {
   clearQueue,
   getQueueInfo,
   getTaskHistory,
+  getActiveSessionCount,
 } from "./session-manager.mjs";
 
 import { addGrant, revokeGrant, startGrantCleanup, restoreGrants } from "./grants.mjs";
-import { closeDb, getAllSessions } from "./state.mjs";
+import { closeDb, getAllSessions, getTaskStats } from "./state.mjs";
 import { stopCopilotClient } from "./copilot-client.mjs";
 import { redactSecrets } from "./secret-scanner.mjs";
 import { createLogger } from "./logger.mjs";
@@ -89,18 +92,21 @@ const commands = [
         .setDescription("Time-to-live in minutes (default: 30)")
         .setMinValue(1)
         .setMaxValue(1440)
-    ),
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("revoke")
     .setDescription("Revoke agent access to a path")
     .addStringOption((opt) =>
       opt.setName("path").setDescription("Absolute path to revoke").setRequired(true)
-    ),
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("reset")
-    .setDescription("Reset the agent session for this channel"),
+    .setDescription("Reset the agent session for this channel")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("stop")
@@ -109,7 +115,8 @@ const commands = [
       opt
         .setName("clear_queue")
         .setDescription("Also clear all pending tasks (default: true)")
-    ),
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("pause")
@@ -145,7 +152,8 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("config")
-    .setDescription("View current bot configuration"),
+    .setDescription("View current bot configuration")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("diff")
@@ -178,6 +186,14 @@ const commands = [
     .addStringOption((opt) =>
       opt.setName("name").setDescription("Branch name (for create/switch)")
     ),
+
+  new SlashCommandBuilder()
+    .setName("help")
+    .setDescription("Show all available bot commands"),
+
+  new SlashCommandBuilder()
+    .setName("stats")
+    .setDescription("Show bot statistics and uptime"),
 ];
 
 // ── Access Control ──────────────────────────────────────────────────────────
@@ -225,6 +241,16 @@ function isRateLimited(interaction) {
   timestamps.push(now);
   return false;
 }
+
+// Periodic cleanup of stale rate-limit entries
+const _rlCleanup = setInterval(() => {
+  const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
+  for (const [userId, ts] of rateLimitMap) {
+    while (ts.length > 0 && ts[0] <= cutoff) ts.shift();
+    if (ts.length === 0) rateLimitMap.delete(userId);
+  }
+}, 300_000);
+_rlCleanup.unref();
 
 // ── Register Slash Commands ─────────────────────────────────────────────────
 
@@ -281,6 +307,12 @@ client.once(Events.ClientReady, async () => {
 
   // ── Startup Notification ────────────────────────────────────────────────
   await sendStartupNotification();
+
+  // ── Bot Presence ────────────────────────────────────────────────────────
+  client.user.setPresence({
+    activities: [{ name: "/task", type: ActivityType.Listening }],
+    status: "online",
+  });
 });
 
 /** Build the startup embed once and reuse for channel + DM. */
@@ -328,6 +360,23 @@ async function sendStartupNotification() {
       log.info("Startup DM sent to admin", { userId: ADMIN_USER_ID });
     } catch (err) {
       log.warn("Failed to send startup DM to admin", { userId: ADMIN_USER_ID, error: err.message });
+    }
+  }
+
+  // Fallback: if neither channel nor admin configured, post to first available text channel
+  if (!STARTUP_CHANNEL_ID && !ADMIN_USER_ID) {
+    try {
+      const guild = client.guilds.cache.first();
+      if (guild) {
+        const fallback = guild.systemChannel
+          ?? guild.channels.cache.find((c) => c.isTextBased() && c.permissionsFor(guild.members.me)?.has("SendMessages"));
+        if (fallback) {
+          await fallback.send({ embeds: [embed] });
+          log.info("Startup notification sent to fallback channel", { channelId: fallback.id, guildId: guild.id });
+        }
+      }
+    } catch (err) {
+      log.warn("Failed to send fallback startup notification", { error: err.message });
     }
   }
 }
@@ -380,7 +429,7 @@ client.on("interactionCreate", async (interaction) => {
         }
 
         // Fire and forget — streaming output handled by session manager
-        enqueueTask(channelId, channel, prompt, outputChannel).catch((err) => {
+        enqueueTask(channelId, channel, prompt, outputChannel, { id: interaction.user.id, tag: interaction.user.tag }).catch((err) => {
           outputChannel
             .send(`❌ **Task failed:** ${err.message}`)
             .catch(() => {});
@@ -576,7 +625,7 @@ client.on("interactionCreate", async (interaction) => {
         }
 
         const lines = info.items.map(
-          (item) => `**${item.index}.** ${item.prompt}${item.prompt.length >= 100 ? "…" : ""}`
+          (item) => `**${item.index}.** ${item.prompt}${item.prompt.length >= 100 ? "…" : ""}${item.userTag ? ` *(${item.userTag})*` : ""}`
         );
         const embed = new EmbedBuilder()
           .setTitle(`📋 Task Queue (${info.length} pending)`)
@@ -792,6 +841,52 @@ client.on("interactionCreate", async (interaction) => {
         break;
       }
 
+      // ── /help ─────────────────────────────────────────────────────────
+      case "help": {
+        const embed = new EmbedBuilder()
+          .setTitle("📖 Bot Commands")
+          .setColor(0x3498db)
+          .setDescription(
+            commands
+              .filter((c) => c.name !== "help")
+              .map((c) => `**/${c.name}** — ${c.description}`)
+              .join("\n")
+          )
+          .setFooter({ text: `${commands.length} commands available` })
+          .setTimestamp();
+        await interaction.reply({ embeds: [embed], ephemeral: true });
+        break;
+      }
+
+      // ── /stats ────────────────────────────────────────────────────────
+      case "stats": {
+        const stats = getTaskStats();
+        const uptime = process.uptime();
+        const days = Math.floor(uptime / 86400);
+        const hours = Math.floor((uptime % 86400) / 3600);
+        const mins = Math.floor((uptime % 3600) / 60);
+        const uptimeStr = days > 0
+          ? `${days}d ${hours}h ${mins}m`
+          : hours > 0
+            ? `${hours}h ${mins}m`
+            : `${mins}m`;
+
+        const embed = new EmbedBuilder()
+          .setTitle("📈 Bot Statistics")
+          .setColor(0x2ecc71)
+          .addFields(
+            { name: "Uptime", value: uptimeStr, inline: true },
+            { name: "Active Sessions", value: String(getActiveSessionCount()), inline: true },
+            { name: "Tasks Total", value: String(stats.total), inline: true },
+            { name: "✅ Completed", value: String(stats.completed), inline: true },
+            { name: "❌ Failed", value: String(stats.failed), inline: true },
+            { name: "🛑 Aborted", value: String(stats.aborted), inline: true },
+          )
+          .setTimestamp();
+        await interaction.reply({ embeds: [embed] });
+        break;
+      }
+
       default:
         await interaction.reply({ content: "Unknown command.", ephemeral: true });
     }
@@ -816,7 +911,8 @@ client.on("messageCreate", async (message) => {
   if (!parent) return;
   const parentId = parent.id;
 
-  // Only handle threads in allowed channels
+  // Only handle threads in allowed guilds and channels
+  if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(parent.guildId)) return;
   if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(parentId)) return;
 
   // Check that we own this thread (the thread's ownerId matches the bot)
@@ -835,7 +931,7 @@ client.on("messageCreate", async (message) => {
 
   log.info("Follow-up in thread", { channelId: parentId, threadId: message.channel.id, prompt: prompt.slice(0, 100) });
 
-  enqueueTask(parentId, parent, prompt, message.channel).catch((err) => {
+  enqueueTask(parentId, parent, prompt, message.channel, { id: message.author.id, tag: message.author.tag }).catch((err) => {
     message.channel
       .send(`❌ **Follow-up failed:** ${err.message}`)
       .catch(() => {});

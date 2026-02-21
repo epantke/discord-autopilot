@@ -58,6 +58,10 @@ const RATE_LIMIT_MAX = safeInt(
 const STARTUP_CHANNEL_ID = process.env.STARTUP_CHANNEL_ID || null;
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID || null;
 
+// ── Limits ──────────────────────────────────────────────────────────────────
+const MAX_QUEUE_SIZE = safeInt(process.env.MAX_QUEUE_SIZE, 50);
+const MAX_PROMPT_LENGTH = safeInt(process.env.MAX_PROMPT_LENGTH, 4000);
+
 export {
   DISCORD_TOKEN,
   BASE_ROOT,
@@ -77,4 +81,6 @@ export {
   RATE_LIMIT_MAX,
   STARTUP_CHANNEL_ID,
   ADMIN_USER_ID,
+  MAX_QUEUE_SIZE,
+  MAX_PROMPT_LENGTH,
 };

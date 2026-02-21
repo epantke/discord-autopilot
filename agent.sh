@@ -220,11 +220,11 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
             warn "  Agent needs push access to create branches and PRs."
           fi
         elif [[ "$REPO_HTTP" == "404" ]]; then
-          warn "Repo access: $REPO_PATH (not found or no access)"
+          warn "Token→Repo: $REPO_PATH (not found or no access)"
         elif [[ "$REPO_HTTP" == "403" ]]; then
-          warn "Repo access: $REPO_PATH (forbidden)"
+          warn "Token→Repo: $REPO_PATH (forbidden)"
         else
-          warn "Repo access: $REPO_PATH (HTTP $REPO_HTTP)"
+          warn "Token→Repo: $REPO_PATH (HTTP $REPO_HTTP)"
         fi
         rm -f /tmp/.gh_repo
       fi
@@ -242,9 +242,9 @@ fi
 
 # Repo URL accessibility
 if git ls-remote --exit-code "$REPO_URL" HEAD >/dev/null 2>&1; then
-  ok "Repository: reachable"
+  ok "Git access: reachable"
 else
-  warn "Repository unreachable via git ls-remote. Clone step may fail."
+  warn "Git access: unreachable via git ls-remote. Clone step may fail."
   warn "  Check URL, SSH keys, or network connectivity."
 fi
 
@@ -316,9 +316,9 @@ cd "$APP"
 
 # Use npm ci if lock file exists, otherwise npm install
 if [[ -f "package-lock.json" ]]; then
-  npm ci --loglevel=warn
+  npm ci --loglevel=error
 else
-  npm install --loglevel=warn
+  npm install --loglevel=error
 fi
 
 ok "Dependencies installed"

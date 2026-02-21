@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { DEFAULT_GRANT_MODE, DEFAULT_GRANT_TTL_MIN } from "./config.mjs";
 import {
   upsertGrant,
@@ -43,6 +44,7 @@ export function getActiveGrants(channelId) {
 export function addGrant(channelId, grantPath, mode, ttlMinutes) {
   mode = mode || DEFAULT_GRANT_MODE;
   ttlMinutes = ttlMinutes ?? DEFAULT_GRANT_TTL_MIN;
+  grantPath = resolve(grantPath);
 
   const expiry = Date.now() + ttlMinutes * 60_000;
   const expiresAt = new Date(expiry).toISOString();

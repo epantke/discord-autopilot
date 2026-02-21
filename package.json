@@ -4,7 +4,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "node src/bot.mjs"
+    "start": "node src/bot.mjs",
+    "build": "node build.mjs"
   },
   "dependencies": {
     "discord.js": "^14.16.0",

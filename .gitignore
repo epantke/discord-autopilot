@@ -6,3 +6,4 @@ state.sqlite
 state.sqlite-wal
 state.sqlite-shm
 *.log
+dist/

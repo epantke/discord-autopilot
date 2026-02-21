@@ -76,6 +76,8 @@ REPO_URL=https://github.com/user/repo.git
 | `/approve_push` | Approve a pending git push |
 | `/config` | View current bot configuration |
 | `/reset` | Reset the agent session |
+| `/help` | List all available commands |
+| `/stats` | Show uptime, task counts, active sessions |
 
 ## How It Works
 
@@ -138,6 +140,8 @@ Discord (slash commands, buttons, threads)
 |----------|---------|-------------|
 | `STARTUP_CHANNEL_ID` | _(none)_ | Channel for online/offline/reconnect notifications |
 | `ADMIN_USER_ID` | _(none)_ | User ID for admin DMs on startup/shutdown |
+| `MAX_QUEUE_SIZE` | `50` | Maximum number of queued tasks per session |
+| `MAX_PROMPT_LENGTH` | `4000` | Maximum prompt length in characters |
 | `TASK_TIMEOUT_MS` | `1800000` | Task timeout (default: 30 min) |
 | `DISCORD_EDIT_THROTTLE_MS` | `1500` | Throttle interval for Discord message edits |
 | `RATE_LIMIT_WINDOW_MS` | `60000` | Rate limit window per user |
@@ -162,6 +166,16 @@ Discord (slash commands, buttons, threads)
 - **Branch sanitization** — only `[\w./-]` allowed, max 100 chars
 - **Session recovery** — grants & sessions restored from SQLite on restart
 - **Graceful shutdown** — SIGINT/SIGTERM handlers, DB cleanup, shutdown notifications
+
+## Standalone Build
+
+Generate standalone deployment scripts with all source files embedded inline (no `src/` directory needed):
+
+```bash
+npm run build      # → dist/agent.sh, dist/agent.ps1
+```
+
+The generated scripts are fully self-contained — drop them on any machine and run.
 
 ## Discord Bot Setup
 

@@ -248,6 +248,64 @@ if (-not $cfgGH) {
     Write-Ok 'GITHUB_TOKEN found'
 }
 
+# ── 4. ADMIN_USER_ID (optional) ──
+$cfgAdmin = $env:ADMIN_USER_ID
+if (-not $cfgAdmin) {
+    Write-Host ''
+    Write-Host '  ' -NoNewline
+    Write-Host ' ADMIN_USER_ID ' -ForegroundColor Black -BackgroundColor DarkGray -NoNewline
+    Write-Host ' (optional)' -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host '  Your Discord User ID — the bot will DM you on startup/shutdown.' -ForegroundColor Gray
+    Write-Host '  How to find it: ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'Settings > Advanced > Developer Mode ON' -ForegroundColor Cyan
+    Write-Host '  Then right-click your name ' -ForegroundColor DarkGray -NoNewline
+    Write-Host ([char]0x2192) -ForegroundColor DarkGray -NoNewline
+    Write-Host ' Copy User ID' -ForegroundColor White
+    Write-Host '  Press ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'Enter' -ForegroundColor Yellow -NoNewline
+    Write-Host ' to skip.' -ForegroundColor DarkGray
+    Write-Host ''
+    $cfgAdmin = Read-SecureInput 'Admin User ID (or Enter to skip)'
+    if ($cfgAdmin) {
+        [Environment]::SetEnvironmentVariable('ADMIN_USER_ID', $cfgAdmin, 'Process')
+        $script:EnvChanged = $true
+        Write-Ok 'ADMIN_USER_ID set'
+    } else {
+        Write-Info 'ADMIN_USER_ID skipped'
+    }
+} else {
+    Write-Ok "ADMIN_USER_ID found ($cfgAdmin)"
+}
+
+# ── 5. STARTUP_CHANNEL_ID (optional) ──
+$cfgStartup = $env:STARTUP_CHANNEL_ID
+if (-not $cfgStartup) {
+    Write-Host ''
+    Write-Host '  ' -NoNewline
+    Write-Host ' STARTUP_CHANNEL_ID ' -ForegroundColor Black -BackgroundColor DarkGray -NoNewline
+    Write-Host ' (optional)' -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host '  Channel for bot online/offline notifications.' -ForegroundColor Gray
+    Write-Host '  Right-click any text channel ' -ForegroundColor DarkGray -NoNewline
+    Write-Host ([char]0x2192) -ForegroundColor DarkGray -NoNewline
+    Write-Host ' Copy Channel ID' -ForegroundColor White
+    Write-Host '  Press ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'Enter' -ForegroundColor Yellow -NoNewline
+    Write-Host ' to skip (bot uses first available channel).' -ForegroundColor DarkGray
+    Write-Host ''
+    $cfgStartup = Read-SecureInput 'Startup Channel ID (or Enter to skip)'
+    if ($cfgStartup) {
+        [Environment]::SetEnvironmentVariable('STARTUP_CHANNEL_ID', $cfgStartup, 'Process')
+        $script:EnvChanged = $true
+        Write-Ok 'STARTUP_CHANNEL_ID set'
+    } else {
+        Write-Info 'STARTUP_CHANNEL_ID skipped'
+    }
+} else {
+    Write-Ok "STARTUP_CHANNEL_ID found ($cfgStartup)"
+}
+
 # ── Offer to save .env ──
 if ($script:EnvChanged) {
     Write-Host ''
@@ -267,9 +325,13 @@ if ($script:EnvChanged) {
         $lines += "REPO_URL=$([Environment]::GetEnvironmentVariable('REPO_URL','Process'))"
         $gh = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN','Process')
         if ($gh) { $lines += "GITHUB_TOKEN=$gh" }
+        $adminId = [Environment]::GetEnvironmentVariable('ADMIN_USER_ID','Process')
+        if ($adminId) { $lines += "ADMIN_USER_ID=$adminId" }
+        $startupCh = [Environment]::GetEnvironmentVariable('STARTUP_CHANNEL_ID','Process')
+        if ($startupCh) { $lines += "STARTUP_CHANNEL_ID=$startupCh" }
         # preserve any extra keys from existing .env
         if (Test-Path $EnvFile) {
-            $known = @('DISCORD_TOKEN','REPO_URL','GITHUB_TOKEN')
+            $known = @('DISCORD_TOKEN','REPO_URL','GITHUB_TOKEN','ADMIN_USER_ID','STARTUP_CHANNEL_ID')
             Get-Content $EnvFile | ForEach-Object {
                 $l = $_.Trim()
                 if ($l -and -not $l.StartsWith('#') -and $l -match '^([^=]+)=') {
@@ -524,13 +586,13 @@ if ($ghToken) {
                     try { $repoStatus = [int]$_.Exception.Response.StatusCode } catch {}
                 }
                 if ($repoStatus -eq 404) {
-                    Write-Check 'Repo Access' "$repoPath (not found or no access)" $false
+                    Write-Check 'Token→Repo' "$repoPath (not found or no access)" $false
                     Write-Warn '  Token cannot see this repo. Check repo name and token permissions.'
                 } elseif ($repoStatus -eq 403) {
-                    Write-Check 'Repo Access' "$repoPath (forbidden)" $false
+                    Write-Check 'Token→Repo' "$repoPath (forbidden)" $false
                     Write-Warn '  Token is valid but not authorized for this repository.'
                 } else {
-                    Write-Check 'Repo Access' "$repoPath (could not check)" $false
+                    Write-Check 'Token→Repo' "$repoPath (could not check)" $false
                 }
             }
         }
@@ -553,19 +615,19 @@ if ($ghToken) {
     Write-Check 'GitHub Token' 'not set (optional)' $true
 }
 
-# ── Repository URL accessibility ──
+# ── Repository URL accessibility (git) ──
 try {
     $lsOutput = & git ls-remote --exit-code $RepoUrl HEAD 2>&1
     if ($LASTEXITCODE -eq 0) {
-        Write-Check 'Repo Access' 'reachable' $true
+        Write-Check 'Git Access' 'reachable' $true
     } else {
         $lsErr = ($lsOutput | Out-String).Trim()
         if ($lsErr.Length -gt 60) { $lsErr = $lsErr.Substring(0, 57) + '...' }
-        Write-Check 'Repo Access' "unreachable ($lsErr)" $false
+        Write-Check 'Git Access' "unreachable ($lsErr)" $false
         Write-Warn '  Check URL, SSH keys, or network. Clone step may fail.'
     }
 } catch {
-    Write-Check 'Repo Access' "error: $($_.Exception.Message)" $false
+    Write-Check 'Git Access' "error: $($_.Exception.Message)" $false
     Write-Warn '  git ls-remote failed. Clone step may fail.'
 }
 
@@ -688,9 +750,9 @@ Write-Info 'Running npm install ...'
 Push-Location $App
 try {
     if (Test-Path 'package-lock.json') {
-        npm ci --loglevel=warn
+        npm ci --loglevel=error
     } else {
-        npm install --loglevel=warn
+        npm install --loglevel=error
     }
     $pkgCount = (Get-ChildItem (Join-Path $App 'node_modules') -Directory -ErrorAction SilentlyContinue).Count
     Write-Ok "$pkgCount packages installed"
@@ -737,7 +799,9 @@ Write-Host 'Ctrl+C' -ForegroundColor Yellow -NoNewline
 Write-Host ' to stop' -ForegroundColor DarkGray
 Write-Host ''
 
-$env:PROJECT_NAME = $ProjectName
-$env:REPO_PATH    = $RepoDir
+$env:PROJECT_NAME      = $ProjectName
+$env:REPO_PATH         = $RepoDir
+$env:ADMIN_USER_ID     = [Environment]::GetEnvironmentVariable('ADMIN_USER_ID','Process')
+$env:STARTUP_CHANNEL_ID = [Environment]::GetEnvironmentVariable('STARTUP_CHANNEL_ID','Process')
 
 & node (Join-Path $App 'src\bot.mjs')

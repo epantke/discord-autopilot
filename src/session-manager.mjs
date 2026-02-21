@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH, TASK_TIMEOUT_MS } from "./config.mjs";
+import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH } from "./config.mjs";
 import {
   upsertSession,
   getSession,
@@ -224,11 +224,26 @@ export async function getOrCreateSession(channelId, channel) {
  * @param {string} prompt
  * @param {import("discord.js").TextBasedChannel} [outputChannel] - Thread or channel for output
  */
-export async function enqueueTask(channelId, channel, prompt, outputChannel) {
+export async function enqueueTask(channelId, channel, prompt, outputChannel, user) {
+  if (prompt.length > MAX_PROMPT_LENGTH) {
+    throw new Error(`Prompt too long (${prompt.length}/${MAX_PROMPT_LENGTH} chars).`);
+  }
+
   const ctx = await getOrCreateSession(channelId, channel);
 
+  if (ctx.queue.length >= MAX_QUEUE_SIZE) {
+    throw new Error(`Queue full (${MAX_QUEUE_SIZE} tasks max). Use \`/queue clear\` or wait.`);
+  }
+
   return new Promise((resolve, reject) => {
-    ctx.queue.push({ prompt, resolve, reject, outputChannel: outputChannel || channel });
+    ctx.queue.push({
+      prompt,
+      resolve,
+      reject,
+      outputChannel: outputChannel || channel,
+      userId: user?.id || null,
+      userTag: user?.tag || null,
+    });
     processQueue(channelId, channel);
   });
 }
@@ -245,6 +260,11 @@ async function processQueue(channelId, channel) {
   ctx.output = new DiscordOutput(outputChannel);
   ctx.taskId = insertTask(channelId, prompt);
   log.info("Task started", { channelId, taskId: ctx.taskId, prompt: prompt.slice(0, 100) });
+
+  // Typing indicator while agent is working
+  outputChannel.sendTyping().catch(() => {});
+  const typingInterval = setInterval(() => outputChannel.sendTyping().catch(() => {}), 8_000);
+  typingInterval.unref();
 
   let timeoutTimer;
   try {
@@ -283,10 +303,11 @@ async function processQueue(channelId, channel) {
     }
     reject(err);
   } finally {
+    clearInterval(typingInterval);
     ctx.output = null;
-    // Continue queue unless paused
+    // Continue queue unless paused (use setImmediate to avoid stack overflow)
     if (!ctx.paused) {
-      processQueue(channelId, channel);
+      setImmediate(() => processQueue(channelId, channel));
     }
   }
 }
@@ -425,7 +446,7 @@ export function getQueueInfo(channelId) {
   return {
     paused: ctx.paused,
     length: ctx.queue.length,
-    items: ctx.queue.map((q, i) => ({ index: i + 1, prompt: q.prompt.slice(0, 100) })),
+    items: ctx.queue.map((q, i) => ({ index: i + 1, prompt: q.prompt.slice(0, 100), userTag: q.userTag })),
   };
 }
 
@@ -439,4 +460,8 @@ export function getTaskHistory(channelId, limit = 10) {
 
 export function getStoredSessions() {
   return getAllSessions();
+}
+
+export function getActiveSessionCount() {
+  return sessions.size;
 }
