@@ -165,8 +165,11 @@ export async function getOrCreateSession(channelId, channel) {
     },
 
     onUserQuestion: async (question, choices) => {
+      const ctx = sessions.get(channelId);
+      if (ctx) ctx.awaitingQuestion = true;
+
       // Post question in Discord and wait for next message in channel
-      const msg = await channel.send(
+      await channel.send(
         `❓ **Agent asks:**\n${question}` +
           (choices ? `\nOptions: ${choices.join(", ")}` : "")
       );
@@ -180,6 +183,8 @@ export async function getOrCreateSession(channelId, channel) {
         return collected.first()?.content || "No answer provided.";
       } catch {
         return "No answer provided within timeout.";
+      } finally {
+        if (ctx) ctx.awaitingQuestion = false;
       }
     },
   });
@@ -211,6 +216,8 @@ export async function getOrCreateSession(channelId, channel) {
     taskId: null,
     paused: false,
     _aborted: false,
+    currentPrompt: null,
+    awaitingQuestion: false,
   };
 
   sessions.set(channelId, ctx);
@@ -266,6 +273,7 @@ async function processQueue(channelId, channel) {
   const { prompt, resolve, reject, outputChannel } = ctx.queue.shift();
 
   ctx.status = "working";
+  ctx.currentPrompt = prompt;
   updateSessionStatus(channelId, "working");
   ctx.output = new DiscordOutput(outputChannel);
   ctx.taskId = insertTask(channelId, prompt);
@@ -315,6 +323,7 @@ async function processQueue(channelId, channel) {
   } finally {
     clearInterval(typingInterval);
     ctx.output = null;
+    ctx.currentPrompt = null;
     // Continue queue unless paused (use setImmediate to avoid stack overflow)
     if (!ctx.paused) {
       setImmediate(() => processQueue(channelId, channel));
@@ -361,6 +370,7 @@ export function getSessionStatus(channelId) {
     branch: ctx.branch,
     queueLength: ctx.queue.length,
     grants: grantList,
+    currentPrompt: ctx.currentPrompt,
   };
 }
 
@@ -475,4 +485,14 @@ export function getStoredSessions() {
 
 export function getActiveSessionCount() {
   return sessions.size;
+}
+
+/**
+ * Check if a session's onUserQuestion callback is currently awaiting input.
+ * When true, messageCreate should NOT enqueue a follow-up — the message will
+ * be consumed by the awaitMessages collector instead.
+ */
+export function isAwaitingQuestion(channelId) {
+  const ctx = sessions.get(channelId);
+  return ctx?.awaitingQuestion === true;
 }

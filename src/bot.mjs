@@ -44,6 +44,7 @@ import {
   getQueueInfo,
   getTaskHistory,
   getActiveSessionCount,
+  isAwaitingQuestion,
 } from "./session-manager.mjs";
 
 import { addGrant, revokeGrant, startGrantCleanup, restoreGrants } from "./grants.mjs";
@@ -59,7 +60,7 @@ import {
 import { stopCopilotClient } from "./copilot-client.mjs";
 import { redactSecrets } from "./secret-scanner.mjs";
 import { createLogger } from "./logger.mjs";
-import { execSync, execFileSync, execFile } from "node:child_process";
+import { execSync, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
 
@@ -950,7 +951,9 @@ client.on("interactionCreate", async (interaction) => {
               name: "Admin Roles",
               value: ADMIN_ROLE_IDS ? [...ADMIN_ROLE_IDS].join(", ") : "*(none — all users allowed)*",
               inline: false,
-            }
+            },
+            { name: "Task Timeout", value: `${Math.round(TASK_TIMEOUT_MS / 60_000)} min`, inline: true },
+            { name: "Rate Limit", value: `${RATE_LIMIT_MAX} / ${Math.round(RATE_LIMIT_WINDOW_MS / 1000)}s`, inline: true },
           )
           .setTimestamp();
         await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
@@ -1170,6 +1173,9 @@ client.on("messageCreate", async (message) => {
     const status = getSessionStatus(dmChannelId);
     if (!status) return; // No active session in this DM — ignore
 
+    // If the agent is waiting for a question answer, don't enqueue as follow-up
+    if (isAwaitingQuestion(dmChannelId)) return;
+
     const prompt = message.content.trim();
     if (!prompt) return;
 
@@ -1200,6 +1206,9 @@ client.on("messageCreate", async (message) => {
   if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(parent.guildId)) return;
   if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(parentId)) return;
   if (message.channel.ownerId !== client.user.id) return;
+
+  // If the agent is waiting for a question answer, don't enqueue as follow-up
+  if (isAwaitingQuestion(parentId)) return;
 
   if (ADMIN_ROLE_IDS) {
     const memberRoles = message.member?.roles?.cache;
