@@ -233,7 +233,8 @@ if ($script:EnvChanged) {
     Write-Host '  ' -NoNewline
     $saveAnswer = Read-Host "$([char]0x25B8) Save to .env? [Y/n]"
     if ($saveAnswer -eq '' -or $saveAnswer -match '^[yYjJ]') {
-        $lines = @("# Discord x Copilot Agent — auto-generated $(Get-Date -Format 'yyyy-MM-dd')")
+        $dateFmt = Get-Date -Format 'yyyy-MM-dd'
+        $lines = @("# Discord x Copilot Agent - auto-generated $dateFmt")
         $lines += "DISCORD_TOKEN=$([Environment]::GetEnvironmentVariable('DISCORD_TOKEN','Process'))"
         $lines += "REPO_URL=$([Environment]::GetEnvironmentVariable('REPO_URL','Process'))"
         $gh = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN','Process')
@@ -249,7 +250,8 @@ if ($script:EnvChanged) {
             }
         }
         [System.IO.File]::WriteAllLines($EnvFile, $lines, (New-Object System.Text.UTF8Encoding $false))
-        Write-Ok ".env saved ($($lines.Count - 1) values)"
+        $valCount = $lines.Count - 1
+        Write-Ok ".env saved ($valCount values)"
     } else {
         Write-Info '.env not saved'
     }
@@ -1947,7 +1949,7 @@ Write-Host ''
 
 # ── Go ──
 Write-Host '    ' -NoNewline
-Write-Host ' $([char]0x25BA) STARTING BOT ' -ForegroundColor Black -BackgroundColor Green -NoNewline
+Write-Host " $([char]0x25BA) STARTING BOT " -ForegroundColor Black -BackgroundColor Green -NoNewline
 Write-Host '  press ' -ForegroundColor DarkGray -NoNewline
 Write-Host 'Ctrl+C' -ForegroundColor Yellow -NoNewline
 Write-Host ' to stop' -ForegroundColor DarkGray
