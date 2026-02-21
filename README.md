@@ -4,9 +4,9 @@
 
 **Delegate coding tasks to an autonomous AI agent — right from Discord.**
 
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen?logo=node.js)](https://nodejs.org)
-[![Discord.js](https://img.shields.io/badge/discord.js-v14-5865F2?logo=discord&logoColor=white)](https://discord.js.org)
-[![Copilot SDK](https://img.shields.io/badge/built%20with-Copilot%20SDK-000?logo=github)](https://github.com/github/copilot-sdk)
+[![CI](https://github.com/epantke/remote-coding-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/epantke/remote-coding-agent/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/epantke/remote-coding-agent?logo=github)](https://github.com/epantke/remote-coding-agent/releases/latest)
+[![GitHub Stars](https://img.shields.io/github/stars/epantke/remote-coding-agent?style=flat&logo=github)](https://github.com/epantke/remote-coding-agent/stargazers)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Pages](https://img.shields.io/badge/docs-GitHub%20Pages-5865F2?logo=github)](https://epantke.github.io/remote-coding-agent/)
 
@@ -15,6 +15,8 @@
 ---
 
 Drop a `/task` in Discord and the agent edits files, runs tests, commits — and streams progress live into a thread. `git push` always requires your approval first.
+
+> **📖 [Full documentation & interactive guide →](https://epantke.github.io/remote-coding-agent/)**
 
 ## Highlights
 
@@ -71,6 +73,14 @@ DISCORD_TOKEN=your-bot-token
 REPO_URL=https://github.com/user/repo.git
 ```
 
+## Discord Bot Setup
+
+1. [Discord Developer Portal](https://discord.com/developers/applications) → New Application → Bot → copy token
+2. Enable **Message Content Intent** under Bot settings
+3. Bot Permissions: `Send Messages`, `Embed Links`, `Attach Files`, `Use Slash Commands`, `Create Public Threads`, `Send Messages in Threads`
+4. OAuth2 → URL Generator → scopes: `bot`, `applications.commands` → invite
+5. Set `DISCORD_TOKEN` and run `./agent.sh` or `.\agent.ps1`
+
 ## Commands
 
 | Command | Description |
@@ -93,34 +103,17 @@ REPO_URL=https://github.com/user/repo.git
 
 ## How It Works
 
-```
-Discord (slash commands, buttons, threads)
-    ↕
-  Bot  ←→  Policy Engine  ←→  Push Approval Gate
-    ↕         (path security,       (embed + buttons,
-  Session     compound cmd scan)     10 min timeout)
-  Manager
-    ↕
-  Copilot SDK  ←→  copilot CLI (ACP / stdio)
-    ↕
-  Discord Output (throttled streaming, secret redaction)
-```
-
-1. `/task` → bot creates a thread (or replies in DM) → session manager provisions a git worktree
-2. Copilot agent works autonomously; every tool call passes through the policy engine
-3. Output streams live into the thread/DM; `git push` triggers an approval gate with buttons
-4. Users reply in threads or DMs for follow-up tasks — the agent picks them up automatically
+1. **`/task`** → bot creates a thread (or replies in DM) → session manager provisions a git worktree
+2. **Agent works** — Copilot agent works autonomously; every tool call passes through the policy engine
+3. **Live stream** — output streams into the thread/DM; secrets are redacted before posting
+4. **Push gate** — `git push` triggers an approval gate with buttons; you review and decide
 
 ## Architecture
 
-**Repository layout:**
-
 ```
-agent.sh                  # Deployment script (Linux / macOS)
-agent.ps1                 # Deployment script (Windows)
-build.mjs                 # Generates standalone scripts → dist/
+agent.sh / agent.ps1      # Deployment scripts (standalone after build)
+build.mjs                  # Generates standalone scripts → dist/
 src/
-├── package.json          # Dependencies & npm scripts
 ├── bot.mjs               # Discord client, slash commands, RBAC
 ├── config.mjs            # ENV parsing, defaults
 ├── state.mjs             # SQLite (WAL), migrations
@@ -132,19 +125,6 @@ src/
 ├── push-approval.mjs     # Push gate, diff summary, buttons
 ├── secret-scanner.mjs    # Token redaction (9 patterns)
 └── logger.mjs            # Structured JSON logging
-```
-
-**Runtime layout** (created by deployment scripts):
-
-```
-~/.local/share/discord-agent/
-├── app/                  # Bot runtime (copied from src/)
-│   ├── src/
-│   │   └── *.mjs
-│   └── package.json
-├── repos/<project>/      # Cloned repository
-├── workspaces/<project>/ # Git worktrees (one per channel)
-└── state.sqlite          # Sessions, grants, task history
 ```
 
 ## Configuration
@@ -179,36 +159,17 @@ src/
 
 ## Security
 
-- **Path security** — `fs.realpathSync()` prevents symlink traversal
-- **Deny-by-default** — all file/shell ops outside workspace blocked without explicit grant
-- **Compound command scanning** — detects `git push` in `&&`, `||`, `;`, pipes, `sh -c`, `eval`, backticks
-- **`cd` target validation** — blocks shell `cd` into paths outside workspace
-- **Push approval gate** — `git push`, `gh pr create/merge` require Discord button approval (10 min timeout)
-- **Secret scanner** — redacts 9 token patterns (GitHub PAT, AWS, Slack, Discord, OpenAI, …) before posting
-- **Grant TTL + auto-revoke** — temporary grants with automatic expiration
-- **Workspace isolation** — each channel gets its own git worktree
-- **RBAC** — admin roles for privileged commands; rate limiting per user (admins exempt)
-- **Branch sanitization** — only `[\w./-]` allowed, max 100 chars
-- **Session recovery** — grants & sessions restored from SQLite on restart
-- **Graceful shutdown** — SIGINT/SIGTERM handlers, DB cleanup, shutdown notifications
+The agent enforces **deny-by-default** security: all file/shell access outside the workspace is blocked, `git push` requires button approval, and secrets are auto-redacted before posting to Discord. Additional layers include symlink-safe path resolution, compound command scanning, RBAC, grant TTL with auto-revoke, and per-channel workspace isolation.
+
+See the [full security breakdown](https://epantke.github.io/remote-coding-agent/#security) for details.
 
 ## Standalone Build
-
-Generate standalone deployment scripts with all source files embedded inline (no `src/` directory needed):
 
 ```bash
 node build.mjs     # → dist/agent.sh, dist/agent.ps1
 ```
 
 The generated scripts are fully self-contained — drop them on any machine and run.
-
-## Discord Bot Setup
-
-1. [Discord Developer Portal](https://discord.com/developers/applications) → New Application → Bot → copy token
-2. Enable **Message Content Intent** under Bot settings
-3. Bot Permissions: `Send Messages`, `Embed Links`, `Attach Files`, `Use Slash Commands`, `Create Public Threads`, `Send Messages in Threads`
-4. OAuth2 → URL Generator → scopes: `bot`, `applications.commands` → invite
-5. Set `DISCORD_TOKEN` and run `./agent.sh` or `.\agent.ps1`
 
 ## License
 
