@@ -20,13 +20,24 @@ Drop a `/task` in Discord and the agent edits files, runs tests, commits — and
 - 🤖 **Autonomous agent** — edits, tests, commits without hand-holding
 - 📡 **Live streaming** — output streams into per-task Discord threads
 - 🔒 **Push approval gate** — `git push` & PR actions require human approval via buttons
-- 🧵 **Thread follow-ups** — reply in an agent thread to send follow-up tasks
-- 🗂️ **Task queue** — queue multiple tasks, pause/resume/clear at will
+- 🧵 **Thread & DM follow-ups** — reply in an agent thread or DM to send follow-up tasks
+- 📁 **Task queue** — queue multiple tasks, pause/resume/clear at will
 - ❓ **Ask-user** — agent can ask clarifying questions via Discord and wait for your answer
 - 🛡️ **Deny-by-default** — all access outside workspace blocked unless explicitly granted
 - 🔑 **Secret scanner** — auto-redacts tokens & keys before posting to Discord
 - 💾 **Session recovery** — sessions, grants & history survive bot restarts (SQLite)
-- 🏗️ **Workspace isolation** — each Discord channel gets its own git worktree
+- 🏗️ **Workspace isolation** — each Discord channel / DM gets its own git worktree
+
+## ⚠️ Security Notice & Disclaimer
+
+> **This project is in active development and provided as-is, without any warranty or guarantee of any kind.**
+>
+> - This software is **experimental**. It grants an AI agent autonomous access to edit files, run shell commands, and make git commits in your repository. **Use at your own risk.**
+> - The authors and contributors assume **no liability** for any damage, data loss, security incidents, unintended code changes, or other issues arising from the use of this software.
+> - **Do not run this on production systems or repositories containing sensitive data** without understanding the risks.
+> - While security measures are built in (deny-by-default policy, push approval gates, secret redaction), **no software is immune to vulnerabilities**. The AI agent may produce unexpected or incorrect results.
+> - You are solely responsible for reviewing all changes made by the agent before merging or deploying them.
+> - By using this software, you accept full responsibility for any consequences.
 
 ## Quick Start
 
@@ -94,10 +105,10 @@ Discord (slash commands, buttons, threads)
   Discord Output (throttled streaming, secret redaction)
 ```
 
-1. `/task` → bot creates a thread → session manager provisions a git worktree
+1. `/task` → bot creates a thread (or replies in DM) → session manager provisions a git worktree
 2. Copilot agent works autonomously; every tool call passes through the policy engine
-3. Output streams live into the thread; `git push` triggers an approval gate with buttons
-4. Users reply in threads for follow-up tasks — the agent picks them up automatically
+3. Output streams live into the thread/DM; `git push` triggers an approval gate with buttons
+4. Users reply in threads or DMs for follow-up tasks — the agent picks them up automatically
 
 ## Architecture
 
@@ -201,3 +212,7 @@ The generated scripts are fully self-contained — drop them on any machine and 
 ## License
 
 [MIT](LICENSE)
+
+---
+
+<sub>This software is provided "as is" without warranty of any kind. See the [Security Notice](#%EF%B8%8F-security-notice--disclaimer) above.</sub>
