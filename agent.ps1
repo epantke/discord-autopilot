@@ -11,13 +11,23 @@ $ErrorActionPreference = 'Stop'
 
 # ── Output helpers ───────────────────────────────────────────────────────────
 
-function Write-Info  { param([string]$Msg) Write-Host "[INFO]  $Msg" -ForegroundColor Cyan }
-function Write-Ok    { param([string]$Msg) Write-Host "[OK]    $Msg" -ForegroundColor Green }
-function Write-Warn  { param([string]$Msg) Write-Host "[WARN]  $Msg" -ForegroundColor Yellow }
+function Write-Info  { param([string]$Msg) Write-Host "  $([char]0x25B8) $Msg" -ForegroundColor Cyan }
+function Write-Ok    { param([string]$Msg) Write-Host "  $([char]0x2714) $Msg" -ForegroundColor Green }
+function Write-Warn  { param([string]$Msg) Write-Host "  $([char]0x26A0) $Msg" -ForegroundColor Yellow }
 function Write-Fatal {
     param([string]$Msg)
-    Write-Host "[FATAL] $Msg" -ForegroundColor Red
+    Write-Host "  $([char]0x2718) $Msg" -ForegroundColor Red
     exit 1
+}
+function Write-Step {
+    param([int]$Num, [int]$Total, [string]$Title)
+    Write-Host ''
+    $bar = ([string][char]0x2500) * (48 - $Title.Length)
+    Write-Host "  [$Num/$Total] $([char]0x25C6) $Title $bar" -ForegroundColor White
+}
+function Write-FileWrite {
+    param([string]$Name)
+    Write-Host "       $([char]0x2502) $([char]0x25CB) $Name" -ForegroundColor DarkGray
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -41,16 +51,22 @@ if (Test-Path $EnvFile) {
 }
 
 Write-Host ''
-Write-Host ([char]0x2554 + ([string][char]0x2550) * 50 + [char]0x2557) -ForegroundColor Cyan
-Write-Host "$([char]0x2551)  Discord x Copilot Remote Coding Agent          $([char]0x2551)" -ForegroundColor Cyan
-Write-Host ([char]0x255A + ([string][char]0x2550) * 50 + [char]0x255D) -ForegroundColor Cyan
+Write-Host ''
+Write-Host "    $([char]0x2584)$([char]0x2584)$([char]0x2584)" -ForegroundColor Magenta -NoNewline
+Write-Host '  Discord ' -ForegroundColor White -NoNewline
+Write-Host ([char]0x00D7) -ForegroundColor DarkGray -NoNewline
+Write-Host ' Copilot' -ForegroundColor White
+Write-Host "    $([char]0x2580)$([char]0x2580)$([char]0x2580)" -ForegroundColor Magenta -NoNewline
+Write-Host '  Autonomous Remote Coding Agent' -ForegroundColor DarkGray
+Write-Host ('    ' + ([string][char]0x2500) * 46) -ForegroundColor DarkGray
 Write-Host ''
 
 $RepoUrl = $env:REPO_URL
 if ($RepoUrl) {
-    Write-Info "Using REPO_URL from environment: $RepoUrl"
+    Write-Info "REPO_URL from environment: $RepoUrl"
 } else {
-    $RepoUrl = Read-Host 'Repo URL?'
+    Write-Host '  ' -NoNewline
+    $RepoUrl = Read-Host "$([char]0x25B8) Repo URL"
 }
 
 if (-not $RepoUrl) { Write-Fatal 'No repo URL provided.' }
@@ -58,6 +74,8 @@ if (-not $RepoUrl) { Write-Fatal 'No repo URL provided.' }
 # ──────────────────────────────────────────────────────────────────────────────
 # 2) Prerequisite checks
 # ──────────────────────────────────────────────────────────────────────────────
+
+Write-Step 1 6 'Prerequisites'
 
 $Missing = @()
 
@@ -120,6 +138,8 @@ Write-Ok 'DISCORD_TOKEN is set'
 # 3) Derive project name & paths
 # ──────────────────────────────────────────────────────────────────────────────
 
+Write-Step 2 6 'Paths'
+
 $ProjectName = [System.IO.Path]::GetFileNameWithoutExtension($RepoUrl) -replace '\.git$', ''
 $ProjectName = $ProjectName.Split('/')[-1]
 
@@ -129,11 +149,20 @@ $App        = Join-Path $Base 'app'
 $Workspaces = if ($env:WORKSPACES_ROOT) { $env:WORKSPACES_ROOT } else { Join-Path $Base 'workspaces' }
 $RepoDir    = Join-Path $Repos $ProjectName
 
-Write-Info "Project:    $ProjectName"
-Write-Info "Base:       $Base"
-Write-Info "Repo:       $RepoDir"
-Write-Info "App:        $App"
-Write-Info "Workspaces: $Workspaces"
+$colW = 14
+Write-Host "       $([char]0x250C)$(([string][char]0x2500) * 50)" -ForegroundColor DarkGray
+@(
+    @('Project',    $ProjectName),
+    @('Base',       $Base),
+    @('Repo',       $RepoDir),
+    @('App',        $App),
+    @('Workspaces', $Workspaces)
+) | ForEach-Object {
+    Write-Host "       $([char]0x2502) " -ForegroundColor DarkGray -NoNewline
+    Write-Host ("$($_[0]):".PadRight($colW)) -ForegroundColor Cyan -NoNewline
+    Write-Host $_[1] -ForegroundColor White
+}
+Write-Host "       $([char]0x2514)$(([string][char]0x2500) * 50)" -ForegroundColor DarkGray
 
 foreach ($dir in @($Repos, (Join-Path $App 'src'), $Workspaces)) {
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -142,6 +171,8 @@ foreach ($dir in @($Repos, (Join-Path $App 'src'), $Workspaces)) {
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) Clone or update repo
 # ──────────────────────────────────────────────────────────────────────────────
+
+Write-Step 3 6 'Repository'
 
 if (Test-Path (Join-Path $RepoDir '.git')) {
     Write-Info 'Updating existing repo...'
@@ -158,7 +189,7 @@ if (Test-Path (Join-Path $RepoDir '.git')) {
 # 5) Write application files
 # ──────────────────────────────────────────────────────────────────────────────
 
-Write-Info 'Writing bot application...'
+Write-Step 4 6 'Source files'
 
 # Helper: write UTF-8 without BOM (Node.js expects this)
 function Write-Utf8File {
@@ -170,6 +201,7 @@ function Write-Utf8File {
 
 # ── package.json ─────────────────────────────────────────────────────────────
 
+Write-FileWrite 'package.json'
 Write-Utf8File (Join-Path $App 'package.json') @'
 {
   "name": "discord-copilot-agent",
@@ -189,6 +221,7 @@ Write-Utf8File (Join-Path $App 'package.json') @'
 
 # ── src/logger.mjs ──────────────────────────────────────────────────────────
 
+Write-FileWrite 'src/logger.mjs'
 Write-Utf8File (Join-Path $App 'src\logger.mjs') @'
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.toLowerCase()] ?? LOG_LEVELS.info;
@@ -222,6 +255,7 @@ export function createLogger(component) {
 
 # ── src/secret-scanner.mjs ──────────────────────────────────────────────────
 
+Write-FileWrite 'src/secret-scanner.mjs'
 Write-Utf8File (Join-Path $App 'src\secret-scanner.mjs') @'
 import { createLogger } from "./logger.mjs";
 
@@ -279,6 +313,7 @@ export function redactSecrets(text) {
 
 # ── src/config.mjs ──────────────────────────────────────────────────────────
 
+Write-FileWrite 'src/config.mjs'
 Write-Utf8File (Join-Path $App 'src\config.mjs') @'
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -353,6 +388,7 @@ export {
 
 # ── src/state.mjs ───────────────────────────────────────────────────────────
 
+Write-FileWrite 'src/state.mjs'
 Write-Utf8File (Join-Path $App 'src\state.mjs') @'
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
@@ -497,6 +533,7 @@ export function closeDb() {
 
 # ── src/policy-engine.mjs ───────────────────────────────────────────────────
 
+Write-FileWrite 'src/policy-engine.mjs'
 Write-Utf8File (Join-Path $App 'src\policy-engine.mjs') @'
 import { realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
@@ -599,6 +636,7 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
 
 # ── src/grants.mjs ──────────────────────────────────────────────────────────
 
+Write-FileWrite 'src/grants.mjs'
 Write-Utf8File (Join-Path $App 'src\grants.mjs') @'
 import { DEFAULT_GRANT_MODE, DEFAULT_GRANT_TTL_MIN } from "./config.mjs";
 import {
@@ -679,6 +717,7 @@ export function startGrantCleanup(intervalMs = 60_000) {
 
 # ── src/discord-output.mjs ──────────────────────────────────────────────────
 
+Write-FileWrite 'src/discord-output.mjs'
 Write-Utf8File (Join-Path $App 'src\discord-output.mjs') @'
 import { DISCORD_EDIT_THROTTLE_MS } from "./config.mjs";
 import { AttachmentBuilder } from "discord.js";
@@ -778,6 +817,7 @@ export class DiscordOutput {
 
 # ── src/push-approval.mjs ───────────────────────────────────────────────────
 
+Write-FileWrite 'src/push-approval.mjs'
 Write-Utf8File (Join-Path $App 'src\push-approval.mjs') @'
 import {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
@@ -913,6 +953,7 @@ export async function executePush(channel, workspacePath, command) {
 
 # ── src/copilot-client.mjs ──────────────────────────────────────────────────
 
+Write-FileWrite 'src/copilot-client.mjs'
 Write-Utf8File (Join-Path $App 'src\copilot-client.mjs') @'
 import { CopilotClient, approveAll } from "@github/copilot-sdk";
 import { evaluateToolUse } from "./policy-engine.mjs";
@@ -1022,6 +1063,7 @@ export async function stopCopilotClient() {
 
 # ── src/session-manager.mjs ─────────────────────────────────────────────────
 
+Write-FileWrite 'src/session-manager.mjs'
 Write-Utf8File (Join-Path $App 'src\session-manager.mjs') @'
 import { execSync } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
@@ -1266,6 +1308,7 @@ export function getStoredSessions() { return getAllSessions(); }
 
 # ── src/bot.mjs ──────────────────────────────────────────────────────────────
 
+Write-FileWrite 'src/bot.mjs'
 Write-Utf8File (Join-Path $App 'src\bot.mjs') @'
 import {
   Client, GatewayIntentBits, REST, Routes,
@@ -1645,13 +1688,15 @@ client.login(DISCORD_TOKEN).catch((err) => {
 });
 '@
 
-Write-Ok 'All source files written'
+Write-Ok '12 files written'
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 6) Install dependencies
 # ──────────────────────────────────────────────────────────────────────────────
 
-Write-Info 'Installing npm dependencies...'
+Write-Step 5 6 'Dependencies'
+
+Write-Info 'Running npm install...'
 Push-Location $App
 try {
     if (Test-Path 'package-lock.json') {
@@ -1659,7 +1704,7 @@ try {
     } else {
         npm install --loglevel=warn
     }
-    Write-Ok 'Dependencies installed'
+    Write-Ok 'Dependencies installed (discord.js, copilot-sdk, better-sqlite3)'
 } finally {
     Pop-Location
 }
@@ -1668,14 +1713,23 @@ try {
 # 7) Launch
 # ──────────────────────────────────────────────────────────────────────────────
 
+Write-Step 6 6 'Launch'
+
 Write-Host ''
-Write-Host ([char]0x2554 + ([string][char]0x2550) * 50 + [char]0x2557) -ForegroundColor Green
-Write-Host "$([char]0x2551)  Starting bot - Ctrl+C to stop                  $([char]0x2551)" -ForegroundColor Green
-Write-Host ([char]0x255A + ([string][char]0x2550) * 50 + [char]0x255D) -ForegroundColor Green
+Write-Host "    $([char]0x2554)$(([string][char]0x2550) * 48)$([char]0x2557)" -ForegroundColor Green
+Write-Host "    $([char]0x2551)  $([char]0x25BA) Bot starting " -ForegroundColor Green -NoNewline
+Write-Host '— press Ctrl+C to stop' -ForegroundColor DarkGray -NoNewline
+Write-Host "           $([char]0x2551)" -ForegroundColor Green
+Write-Host "    $([char]0x2551)    Project:  " -ForegroundColor Green -NoNewline
+Write-Host ($ProjectName.PadRight(36)) -ForegroundColor White -NoNewline
+Write-Host "$([char]0x2551)" -ForegroundColor Green
+Write-Host "    $([char]0x2551)    Branch:   " -ForegroundColor Green -NoNewline
+Write-Host ('main'.PadRight(36)) -ForegroundColor White -NoNewline
+Write-Host "$([char]0x2551)" -ForegroundColor Green
+Write-Host "    $([char]0x255A)$(([string][char]0x2550) * 48)$([char]0x255D)" -ForegroundColor Green
 Write-Host ''
 
 $env:PROJECT_NAME = $ProjectName
 $env:REPO_PATH    = $RepoDir
 
-# Run node — replaces this process
 & node (Join-Path $App 'src\bot.mjs')
