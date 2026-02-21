@@ -73,6 +73,9 @@ function csvToValidatedSet(envVal, name) {
   return valid.length > 0 ? new Set(valid) : null;
 }
 
+// ── GitHub Token (cached before copilot-client.mjs may delete it from env) ──
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || null;
+
 // ── Startup Notifications ───────────────────────────────────────────────────
 const STARTUP_CHANNEL_ID = validateSnowflake(process.env.STARTUP_CHANNEL_ID, "STARTUP_CHANNEL_ID");
 const ADMIN_USER_ID = validateSnowflake(process.env.ADMIN_USER_ID, "ADMIN_USER_ID");
@@ -83,6 +86,7 @@ const MAX_PROMPT_LENGTH = safeInt(process.env.MAX_PROMPT_LENGTH, 4000);
 
 export {
   DISCORD_TOKEN,
+  GITHUB_TOKEN,
   BASE_ROOT,
   WORKSPACES_ROOT,
   REPOS_ROOT,

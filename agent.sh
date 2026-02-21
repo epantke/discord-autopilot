@@ -90,19 +90,19 @@ VALIDATION_FAILED=false
 
 # Discord token validation
 if command -v curl >/dev/null 2>&1; then
-  DISCORD_HTTP=$(curl -s -o /tmp/.discord_check -w "%{http_code}" \
-    -H "Authorization: Bot $DISCORD_TOKEN" \
-    "https://discord.com/api/v10/users/@me" --max-time 10 2>/dev/null)
+  DISCORD_CHECK=$(mktemp)
+  DISCORD_HTTP=$(curl -s -o "$DISCORD_CHECK" -w "%{http_code}" \
+    -H @- "https://discord.com/api/v10/users/@me" --max-time 10 2>/dev/null <<< "Authorization: Bot $DISCORD_TOKEN")
   if [[ "$DISCORD_HTTP" == "200" ]]; then
-    DISCORD_USER=$(grep -o '"username":"[^"]*"' /tmp/.discord_check | head -1 | cut -d'"' -f4)
+    DISCORD_USER=$(grep -o '"username":"[^"]*"' "$DISCORD_CHECK" | head -1 | cut -d'"' -f4)
     ok "Discord bot: $DISCORD_USER"
 
     # Check Message Content Intent via /applications/@me
-    APP_HTTP=$(curl -s -o /tmp/.discord_app -w "%{http_code}" \
-      -H "Authorization: Bot $DISCORD_TOKEN" \
-      "https://discord.com/api/v10/applications/@me" --max-time 10 2>/dev/null)
+    DISCORD_APP=$(mktemp)
+    APP_HTTP=$(curl -s -o "$DISCORD_APP" -w "%{http_code}" \
+      -H @- "https://discord.com/api/v10/applications/@me" --max-time 10 2>/dev/null <<< "Authorization: Bot $DISCORD_TOKEN")
     if [[ "$APP_HTTP" == "200" ]]; then
-      APP_FLAGS=$(grep -o '"flags":[0-9]*' /tmp/.discord_app | head -1 | grep -o '[0-9]*$')
+      APP_FLAGS=$(grep -o '"flags":[0-9]*' "$DISCORD_APP" | head -1 | grep -o '[0-9]*$')
       if [[ -n "$APP_FLAGS" ]]; then
         # GatewayMessageContent = 1<<18 (262144), Limited = 1<<19 (524288)
         HAS_MSG_CONTENT=$(( (APP_FLAGS & 262144) | (APP_FLAGS & 524288) ))
@@ -114,14 +114,14 @@ if command -v curl >/dev/null 2>&1; then
         fi
       fi
     fi
-    rm -f /tmp/.discord_app
+    rm -f "$DISCORD_APP"
 
     # Check if bot is in any guilds
-    GUILDS_HTTP=$(curl -s -o /tmp/.discord_guilds -w "%{http_code}" \
-      -H "Authorization: Bot $DISCORD_TOKEN" \
-      "https://discord.com/api/v10/users/@me/guilds?limit=1" --max-time 10 2>/dev/null)
+    DISCORD_GUILDS=$(mktemp)
+    GUILDS_HTTP=$(curl -s -o "$DISCORD_GUILDS" -w "%{http_code}" \
+      -H @- "https://discord.com/api/v10/users/@me/guilds?limit=1" --max-time 10 2>/dev/null <<< "Authorization: Bot $DISCORD_TOKEN")
     if [[ "$GUILDS_HTTP" == "200" ]]; then
-      GUILD_COUNT=$(grep -o '"id"' /tmp/.discord_guilds | wc -l)
+      GUILD_COUNT=$(grep -o '"id"' "$DISCORD_GUILDS" | wc -l)
       if [[ "$GUILD_COUNT" -gt 0 ]]; then
         ok "Bot guilds: in at least 1 server"
       else
@@ -129,7 +129,7 @@ if command -v curl >/dev/null 2>&1; then
         warn "  Invite the bot: Developer Portal > OAuth2 > URL Generator"
       fi
     fi
-    rm -f /tmp/.discord_guilds
+    rm -f "$DISCORD_GUILDS"
 
   elif [[ "$DISCORD_HTTP" == "401" ]]; then
     VALIDATION_FAILED=true
@@ -138,7 +138,7 @@ if command -v curl >/dev/null 2>&1; then
   else
     warn "Discord API returned HTTP $DISCORD_HTTP (network issue?). Continuing..."
   fi
-  rm -f /tmp/.discord_check
+  rm -f "$DISCORD_CHECK"
 else
   warn "curl not found — skipping Discord token validation"
 fi
@@ -159,9 +159,8 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
     GH_HEADERS_FILE=$(mktemp)
     GH_BODY_FILE=$(mktemp)
     GH_HTTP=$(curl -s -D "$GH_HEADERS_FILE" -o "$GH_BODY_FILE" -w "%{http_code}" \
-      -H "Authorization: token $GITHUB_TOKEN" \
       -H "User-Agent: discord-copilot-agent/1.0" \
-      "https://api.github.com/user" --max-time 10 2>/dev/null)
+      -H @- "https://api.github.com/user" --max-time 10 2>/dev/null <<< "Authorization: token $GITHUB_TOKEN")
 
     if [[ "$GH_HTTP" == "200" ]]; then
       GH_USER=$(grep -o '"login":"[^"]*"' "$GH_BODY_FILE" | head -1 | cut -d'"' -f4)
@@ -212,13 +211,13 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
       # Check access to the specific repo
       REPO_PATH=$(echo "$REPO_URL" | sed 's/\.git$//' | sed 's|^https\?://github\.com/||' | sed 's|^git@github\.com:||')
       if [[ "$REPO_PATH" =~ ^[^/]+/[^/]+$ ]]; then
-        REPO_HTTP=$(curl -s -o /tmp/.gh_repo -w "%{http_code}" \
-          -H "Authorization: token $GITHUB_TOKEN" \
+        GH_REPO_FILE=$(mktemp)
+        REPO_HTTP=$(curl -s -o "$GH_REPO_FILE" -w "%{http_code}" \
           -H "User-Agent: discord-copilot-agent/1.0" \
-          "https://api.github.com/repos/$REPO_PATH" --max-time 10 2>/dev/null)
+          -H @- "https://api.github.com/repos/$REPO_PATH" --max-time 10 2>/dev/null <<< "Authorization: token $GITHUB_TOKEN")
         if [[ "$REPO_HTTP" == "200" ]]; then
-          CAN_PUSH=$(grep -o '"push":[a-z]*' /tmp/.gh_repo | head -1 | grep -o 'true\|false')
-          CAN_PULL=$(grep -o '"pull":[a-z]*' /tmp/.gh_repo | head -1 | grep -o 'true\|false')
+          CAN_PUSH=$(grep -o '"push":[a-z]*' "$GH_REPO_FILE" | head -1 | grep -o 'true\|false')
+          CAN_PULL=$(grep -o '"pull":[a-z]*' "$GH_REPO_FILE" | head -1 | grep -o 'true\|false')
           PERMS=""
           [[ "$CAN_PULL" == "true" ]] && PERMS="pull"
           [[ "$CAN_PUSH" == "true" ]] && PERMS="${PERMS:+$PERMS, }push"
@@ -235,7 +234,7 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         else
           warn "Token→Repo: $REPO_PATH (HTTP $REPO_HTTP)"
         fi
-        rm -f /tmp/.gh_repo
+        rm -f "$GH_REPO_FILE"
       fi
 
     elif [[ "$GH_HTTP" == "401" ]]; then

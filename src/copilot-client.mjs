@@ -32,6 +32,12 @@ export function getCopilotClient() {
       // Unknown token format — pass it through and let the SDK decide
       opts.githubToken = token;
     }
+    // DISCORD_TOKEN is never needed by the Copilot CLI subprocess — remove it
+    // to prevent leaking the bot token if the CLI or a tool dumps its env.
+    if (process.env.DISCORD_TOKEN) {
+      delete process.env.DISCORD_TOKEN;
+      log.info("Cleared DISCORD_TOKEN from env — not needed by Copilot CLI");
+    }
     client = new CopilotClient(opts);
   }
   return client;

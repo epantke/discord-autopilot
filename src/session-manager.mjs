@@ -20,6 +20,7 @@ import {
 } from "./grants.mjs";
 import { DiscordOutput } from "./discord-output.mjs";
 import { createPushApprovalRequest } from "./push-approval.mjs";
+import { redactSecrets } from "./secret-scanner.mjs";
 import { createLogger } from "./logger.mjs";
 
 const log = createLogger("session");
@@ -308,7 +309,7 @@ async function processQueue(channelId, channel) {
       completeTask(ctx.taskId, "failed");
       ctx.status = "idle";
       updateSessionStatus(channelId, "idle");
-      ctx.output?.finish(`❌ **Error:** ${err.message}`);
+      ctx.output?.finish(`❌ **Error:** ${redactSecrets(err.message).clean}`);
     }
     reject(err);
   } finally {

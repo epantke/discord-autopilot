@@ -14,6 +14,7 @@ import {
 
 import {
   DISCORD_TOKEN,
+  GITHUB_TOKEN,
   ALLOWED_GUILDS,
   ALLOWED_CHANNELS,
   ADMIN_ROLE_IDS,
@@ -426,11 +427,11 @@ async function validateEnvironment() {
   }
 
   // Check GITHUB_TOKEN — is it still valid?
-  if (process.env.GITHUB_TOKEN) {
+  if (GITHUB_TOKEN) {
     try {
       const resp = await fetch("https://api.github.com/user", {
         headers: {
-          Authorization: `token ${process.env.GITHUB_TOKEN}`,
+          Authorization: `token ${GITHUB_TOKEN}`,
           "User-Agent": "discord-copilot-agent/1.0",
         },
         signal: AbortSignal.timeout(10_000),
@@ -540,24 +541,7 @@ async function recoverFromPreviousErrors() {
 async function sendStartupNotification({ envIssues, recoveryInfo } = {}) {
   const embed = buildStartupEmbed({ envIssues, recoveryInfo });
 
-  // Channel notification
-  let channelSent = false;
-  if (STARTUP_CHANNEL_ID) {
-    try {
-      const ch = await client.channels.fetch(STARTUP_CHANNEL_ID);
-      if (ch?.isTextBased()) {
-        await ch.send({ embeds: [embed] });
-        log.info("Startup notification sent to channel", { channelId: STARTUP_CHANNEL_ID });
-        channelSent = true;
-      } else {
-        log.warn("STARTUP_CHANNEL_ID is not a text channel", { channelId: STARTUP_CHANNEL_ID });
-      }
-    } catch (err) {
-      log.warn("Failed to send startup notification to channel", { channelId: STARTUP_CHANNEL_ID, error: err.message });
-    }
-  }
-
-  // Admin DM notification
+  // Admin DM notification (preferred)
   let adminSent = false;
   if (ADMIN_USER_ID) {
     try {
@@ -570,8 +554,24 @@ async function sendStartupNotification({ envIssues, recoveryInfo } = {}) {
     }
   }
 
-  // Fallback: if no notification was delivered, post to first available text channel
-  if (!channelSent && !adminSent) {
+  // Fallback: channel notification if admin DM was not sent
+  if (!adminSent && STARTUP_CHANNEL_ID) {
+    try {
+      const ch = await client.channels.fetch(STARTUP_CHANNEL_ID);
+      if (ch?.isTextBased()) {
+        await ch.send({ embeds: [embed] });
+        log.info("Startup notification sent to channel", { channelId: STARTUP_CHANNEL_ID });
+        return;
+      } else {
+        log.warn("STARTUP_CHANNEL_ID is not a text channel", { channelId: STARTUP_CHANNEL_ID });
+      }
+    } catch (err) {
+      log.warn("Failed to send startup notification to channel", { channelId: STARTUP_CHANNEL_ID, error: err.message });
+    }
+  }
+
+  // Last resort: post to first available text channel
+  if (!adminSent) {
     try {
       const guild = client.guilds.cache.first();
       if (guild) {
@@ -638,7 +638,7 @@ client.on("interactionCreate", async (interaction) => {
         // Fire and forget — streaming output handled by session manager
         enqueueTask(channelId, channel, prompt, outputChannel, { id: interaction.user.id, tag: interaction.user.tag }).catch((err) => {
           outputChannel
-            .send(`❌ **Task failed:** ${err.message}`)
+            .send(`❌ **Task failed:** ${redactSecrets(err.message).clean}`)
             .catch(() => {});
         });
         break;
@@ -952,7 +952,7 @@ client.on("interactionCreate", async (interaction) => {
             await interaction.editReply({ files: [attachment] });
           }
         } catch (err) {
-          await interaction.editReply(`❌ \`${gitCmd}\` failed: ${err.message}`);
+          await interaction.editReply(`❌ \`${gitCmd}\` failed: ${redactSecrets(err.message).clean}`);
         }
         break;
       }
@@ -985,7 +985,7 @@ client.on("interactionCreate", async (interaction) => {
             }).trim();
             await interaction.reply(`\`\`\`\n${branches}\n\`\`\``);
           } catch (err) {
-            await interaction.reply(`❌ Failed: ${err.message}`);
+            await interaction.reply(`❌ Failed: ${redactSecrets(err.message).clean}`);
           }
           break;
         }
@@ -1027,7 +1027,7 @@ client.on("interactionCreate", async (interaction) => {
             });
             await interaction.editReply(`✅ Created and switched to branch \`${branchName}\`.`);
           } catch (err) {
-            await interaction.editReply(`❌ Failed: ${err.message}`);
+            await interaction.editReply(`❌ Failed: ${redactSecrets(err.message).clean}`);
           }
           break;
         }
@@ -1041,7 +1041,7 @@ client.on("interactionCreate", async (interaction) => {
             });
             await interaction.editReply(`✅ Switched to branch \`${branchName}\`.`);
           } catch (err) {
-            await interaction.editReply(`❌ Failed: ${err.message}`);
+            await interaction.editReply(`❌ Failed: ${redactSecrets(err.message).clean}`);
           }
           break;
         }
@@ -1102,7 +1102,7 @@ client.on("interactionCreate", async (interaction) => {
     const reply = interaction.deferred || interaction.replied
       ? (msg) => interaction.editReply(msg)
       : (msg) => interaction.reply({ content: msg, ephemeral: true });
-    await reply(`❌ Error: ${err.message}`).catch(() => {});
+    await reply(`❌ Error: ${redactSecrets(err.message).clean}`).catch(() => {});
   }
 });
 
@@ -1126,7 +1126,7 @@ client.on("messageCreate", async (message) => {
 
     enqueueTask(dmChannelId, message.channel, prompt, message.channel, { id: message.author.id, tag: message.author.tag }).catch((err) => {
       message.channel
-        .send(`❌ **Follow-up failed:** ${err.message}`)
+        .send(`❌ **Follow-up failed:** ${redactSecrets(err.message).clean}`)
         .catch(() => {});
     });
     return;
@@ -1157,7 +1157,7 @@ client.on("messageCreate", async (message) => {
 
   enqueueTask(parentId, parent, prompt, message.channel, { id: message.author.id, tag: message.author.tag }).catch((err) => {
     message.channel
-      .send(`❌ **Follow-up failed:** ${err.message}`)
+      .send(`❌ **Follow-up failed:** ${redactSecrets(err.message).clean}`)
       .catch(() => {});
   });
 });
@@ -1175,16 +1175,18 @@ async function shutdown(signal) {
     .addFields({ name: "Project", value: PROJECT_NAME, inline: true })
     .setTimestamp();
 
-  if (STARTUP_CHANNEL_ID) {
-    try {
-      const ch = await client.channels.fetch(STARTUP_CHANNEL_ID);
-      if (ch?.isTextBased()) await ch.send({ embeds: [shutdownEmbed] });
-    } catch { /* best effort */ }
-  }
+  let adminNotified = false;
   if (ADMIN_USER_ID) {
     try {
       const user = await client.users.fetch(ADMIN_USER_ID);
       await user.send({ embeds: [shutdownEmbed] });
+      adminNotified = true;
+    } catch { /* best effort */ }
+  }
+  if (!adminNotified && STARTUP_CHANNEL_ID) {
+    try {
+      const ch = await client.channels.fetch(STARTUP_CHANNEL_ID);
+      if (ch?.isTextBased()) await ch.send({ embeds: [shutdownEmbed] });
     } catch { /* best effort */ }
   }
 
