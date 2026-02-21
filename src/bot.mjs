@@ -277,12 +277,19 @@ function isDmRateLimited(userId) {
   return false;
 }
 
-// Periodic cleanup of stale rate-limit entries
+// Periodic cleanup of stale rate-limit entries (cap map size to prevent memory growth)
+const MAX_RATE_LIMIT_ENTRIES = 10_000;
 const _rlCleanup = setInterval(() => {
   const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
   for (const [userId, ts] of rateLimitMap) {
     while (ts.length > 0 && ts[0] <= cutoff) ts.shift();
     if (ts.length === 0) rateLimitMap.delete(userId);
+  }
+  // Hard cap: if someone floods the bot, evict oldest entries
+  if (rateLimitMap.size > MAX_RATE_LIMIT_ENTRIES) {
+    const excess = rateLimitMap.size - MAX_RATE_LIMIT_ENTRIES;
+    const iter = rateLimitMap.keys();
+    for (let i = 0; i < excess; i++) rateLimitMap.delete(iter.next().value);
   }
 }, 300_000);
 _rlCleanup.unref();
@@ -1343,7 +1350,7 @@ client.on("messageCreate", async (message) => {
 
 // ── Graceful Shutdown ───────────────────────────────────────────────────────
 
-async function shutdown(signal) {
+async function shutdown(signal, exitCode = 0) {
   log.info("Shutting down", { signal });
 
   // Hard deadline: force exit if cleanup takes too long
@@ -1376,28 +1383,23 @@ async function shutdown(signal) {
   try { client.destroy(); } catch (err) { log.error("Client destroy failed", { error: err.message }); }
   try { await stopCopilotClient(); } catch (err) { log.error("Copilot stop failed", { error: err.message }); }
   try { closeDb(); } catch (err) { log.error("DB close failed", { error: err.message }); }
-  process.exit(0);
+  process.exit(exitCode);
 }
-
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 // Prevent double-shutdown on repeated signals
 let _shuttingDown = false;
-const _origShutdown = shutdown;
-const safeShutdown = async (signal) => {
+async function safeShutdown(signal, exitCode) {
   if (_shuttingDown) return;
   _shuttingDown = true;
-  await _origShutdown(signal);
-};
-process.removeAllListeners("SIGINT");
-process.removeAllListeners("SIGTERM");
+  await shutdown(signal, exitCode);
+}
+
 process.on("SIGINT", () => safeShutdown("SIGINT"));
 process.on("SIGTERM", () => safeShutdown("SIGTERM"));
 
 process.on("uncaughtException", (err) => {
   log.error("Uncaught exception — shutting down", { error: err?.message || String(err), stack: err?.stack });
-  safeShutdown("uncaughtException").finally(() => process.exit(1));
+  safeShutdown("uncaughtException", 1);
 });
 
 process.on("unhandledRejection", (err) => {
@@ -1414,6 +1416,10 @@ client.on("warn", (msg) => {
 
 client.on("shardDisconnect", (event, shardId) => {
   log.warn("Shard disconnected", { shardId, code: event?.code });
+});
+
+client.on("shardError", (err, shardId) => {
+  log.error("Shard error", { shardId, error: err?.message || String(err) });
 });
 
 client.on("shardReconnecting", (shardId) => {

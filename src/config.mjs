@@ -93,6 +93,10 @@ const MAX_PROMPT_LENGTH = safeInt(process.env.MAX_PROMPT_LENGTH, 4000);
 // When true, tasks aborted by a crash/restart are automatically re-enqueued.
 const AUTO_RETRY_ON_CRASH = (process.env.AUTO_RETRY_ON_CRASH || "false").toLowerCase() === "true";
 
+// ── Auto-Approve Push ───────────────────────────────────────────────────
+// When true, git push commands are auto-approved without Discord button confirmation.
+const AUTO_APPROVE_PUSH = (process.env.AUTO_APPROVE_PUSH || "false").toLowerCase() === "true";
+
 // ── Version ─────────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CURRENT_VERSION = (() => {
@@ -135,4 +139,5 @@ export {
   UPDATE_CHECK_INTERVAL_MS,
   AGENT_SCRIPT_PATH,
   AUTO_RETRY_ON_CRASH,
+  AUTO_APPROVE_PUSH,
 };

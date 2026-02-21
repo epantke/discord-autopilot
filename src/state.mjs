@@ -131,7 +131,14 @@ function runMigrations() {
     v = 3;
   }
 
-  // Future migrations go here as `if (v < 4) { ... setSchemaVersion(4); }`
+  if (v < 4) {
+    // usage_log was created in v3 for cost monitoring, which has been removed
+    db.exec(`DROP TABLE IF EXISTS usage_log`);
+    setSchemaVersion(4);
+    v = 4;
+  }
+
+  // Future migrations go here as `if (v < 5) { ... setSchemaVersion(5); }`
 }
 
 runMigrations();
@@ -279,11 +286,6 @@ const stmtCompleteTask = db.prepare(`
   WHERE id = ?
 `);
 
-const stmtTaskHistory = db.prepare(`
-  SELECT * FROM task_history WHERE channel_id = ?
-  ORDER BY started_at DESC LIMIT ?
-`);
-
 export function insertTask(channelId, prompt, userId = null, timeoutMs = null) {
   const info = stmtInsertTask.run(channelId, prompt, userId, timeoutMs);
   return info.lastInsertRowid;
@@ -291,10 +293,6 @@ export function insertTask(channelId, prompt, userId = null, timeoutMs = null) {
 
 export function completeTask(taskId, status) {
   stmtCompleteTask.run(status, taskId);
-}
-
-export function getTaskHistory(channelId, limit = 10) {
-  return stmtTaskHistory.all(channelId, limit);
 }
 
 // ── Stale state recovery ────────────────────────────────────────────────────
@@ -343,8 +341,6 @@ const stmtPruneOldTasks = db.prepare(
 export function pruneOldTasks() {
   return stmtPruneOldTasks.run().changes;
 }
-
-// ── Usage Log (table exists from migration v3, kept for schema compat) ──────
 
 let dbClosed = false;
 

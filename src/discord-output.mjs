@@ -132,7 +132,7 @@ export class DiscordOutput {
     } catch (err) {
       log.error("Flush failed", { error: err.message, code: err.code });
       // If message was deleted, channel is gone, or permissions changed — start fresh
-      if (err.code === 10008 || err.code === 50005 || err.code === 50001 || err.code === 50013) {
+      if (err.code === 10003 || err.code === 10008 || err.code === 50005 || err.code === 50001 || err.code === 50013) {
         this.message = null;
         try {
           const footer = this._statusFooter ? `\n${this._statusFooter}` : "";
