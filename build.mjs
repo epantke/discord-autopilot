@@ -41,13 +41,24 @@ if (existsSync(lockPath)) {
 sources.push(
   ...srcFiles.map((f) => ({
     name: f,
-    subdir: true,
+    subdir: "src",
     content: readNormalized(join(srcDir, f)),
   })),
 );
 
+// Include llm/*.md persona files
+const llmDir = join(__dirname, "llm");
+const llmFiles = readdirSync(llmDir).filter((f) => f.endsWith(".md")).sort();
+sources.push(
+  ...llmFiles.map((f) => ({
+    name: f,
+    subdir: "llm",
+    content: readNormalized(join(llmDir, f)),
+  })),
+);
+
 const total = sources.length;
-console.log(`Collected ${total} files (package.json + ${srcFiles.length} source files)`);
+console.log(`Collected ${total} files (package.json + ${srcFiles.length} source + ${llmFiles.length} llm files)`);
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -83,12 +94,12 @@ function buildBash() {
     sep,
     'info "Writing embedded application files…"',
     "",
-    'mkdir -p "$APP/src"',
+    'mkdir -p "$APP/src" "$APP/llm"',
     "",
   ];
 
   for (const src of sources) {
-    const dest = src.subdir ? `"$APP/src/${src.name}"` : `"$APP/${src.name}"`;
+    const dest = src.subdir ? `"$APP/${src.subdir}/${src.name}"` : `"$APP/${src.name}"`;
     const tag = `__EOF_${src.name.replace(/[.\-]/g, "_").toUpperCase()}__`;
 
     // Safety: ensure no line in the content matches the heredoc tag
@@ -131,15 +142,18 @@ function buildPs1() {
     "",
     "$AppSrc = Join-Path $App 'src'",
     "if (-not (Test-Path $AppSrc)) { New-Item -ItemType Directory -Path $AppSrc -Force | Out-Null }",
+    "$AppLlm = Join-Path $App 'llm'",
+    "if (-not (Test-Path $AppLlm)) { New-Item -ItemType Directory -Path $AppLlm -Force | Out-Null }",
     "$__utf8 = New-Object System.Text.UTF8Encoding $false",
     "",
   ];
 
+  const ps1SubdirVars = { src: "$AppSrc", llm: "$AppLlm" };
   let counter = 0;
   for (const src of sources) {
     counter++;
     const dest = src.subdir
-      ? `(Join-Path $AppSrc '${src.name}')`
+      ? `(Join-Path ${ps1SubdirVars[src.subdir]} '${src.name}')`
       : `(Join-Path $App '${src.name}')`;
 
     // Check for PowerShell here-string terminator conflict ( '@ at start of line )

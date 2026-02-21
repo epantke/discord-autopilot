@@ -1,8 +1,16 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { CURRENT_VERSION, PROJECT_NAME } from "./config.mjs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const IDENTITY_PROMPT = readFileSync(join(__dirname, "..", "llm", "IDENTITY.md"), "utf-8");
+const SOUL_PROMPT = readFileSync(join(__dirname, "..", "llm", "SOUL.md"), "utf-8");
 
 /**
  * Build a self-awareness system prompt section describing the bot's capabilities,
- * interaction model, and available admin commands.
+ * interaction model, and available admin commands. Prepends the Nyx persona
+ * (IDENTITY.md + SOUL.md) before the operational rules.
  *
  * @param {object} opts
  * @param {string} opts.botName - The bot's Discord username (e.g. "Autopilot")
@@ -11,7 +19,7 @@ import { CURRENT_VERSION, PROJECT_NAME } from "./config.mjs";
  * @returns {string}
  */
 export function buildSelfAwarenessPrompt({ botName, workspacePath, branch }) {
-  return [
+  const capabilities = [
     `You are "${botName}", an autonomous coding agent running as a Discord bot (v${CURRENT_VERSION}, project: ${PROJECT_NAME}).`,
     "",
     "## How users interact with you",
@@ -71,4 +79,6 @@ export function buildSelfAwarenessPrompt({ botName, workspacePath, branch }) {
     "5. Provide clear summaries of what you changed and why.",
     "6. Be conversational and helpful. You are not just a task executor — you can chat, explain, and discuss.",
   ].join("\n");
+
+  return [IDENTITY_PROMPT, SOUL_PROMPT, capabilities].join("\n\n");
 }
