@@ -54,7 +54,7 @@ import {
   markStaleTasksAborted,
   resetStaleSessions,
 } from "./state.mjs";
-import { stopCopilotClient } from "./copilot-client.mjs";
+import { stopCopilotClient, getCopilotClient } from "./copilot-client.mjs";
 import { redactSecrets } from "./secret-scanner.mjs";
 import { createLogger } from "./logger.mjs";
 import { execSync } from "node:child_process";
@@ -461,6 +461,14 @@ async function validateEnvironment() {
         warnings.push(`ALLOWED_GUILDS contains ${guildId} but bot is not in that server.`);
       }
     }
+  }
+
+  // Check Copilot CLI auth — try to get the client (auth check happens on session creation,
+  // but we can at least verify the CLI binary is available)
+  try {
+    getCopilotClient();
+  } catch (err) {
+    errors.push(`Copilot CLI is not available: ${err.message}. Run \`copilot auth login\` on the host.`);
   }
 
   if (errors.length > 0 || warnings.length > 0) {

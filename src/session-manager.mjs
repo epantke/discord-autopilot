@@ -184,7 +184,16 @@ export async function getOrCreateSession(channelId, channel) {
   });
       break; // success
     } catch (err) {
-      if (attempt >= 2) throw err;
+      if (attempt >= 2) {
+        // Provide a clearer message for Copilot auth errors
+        if (err.message?.includes("Authorization") || err.message?.includes("login")) {
+          throw new Error(
+            "Copilot authorization failed. Run `copilot auth login` on the host, " +
+            "or check that GITHUB_TOKEN has Copilot access. Original error: " + err.message
+          );
+        }
+        throw err;
+      }
       log.warn("Session creation failed, retrying", { channelId, error: err.message });
       await new Promise((r) => setTimeout(r, 2_000));
     }
