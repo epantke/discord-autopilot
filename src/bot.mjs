@@ -1244,6 +1244,11 @@ client.on("shardResume", async (shardId) => {
 
 log.info("Starting Discord bot");
 client.login(DISCORD_TOKEN).catch((err) => {
-  log.error("Failed to login to Discord", { error: err.message });
+  if (err.code === "DisallowedIntents" || err.code === 4014) {
+    log.error("Discord rejected privileged intents (Message Content Intent not enabled)", { error: err.message });
+    log.error("Enable it: Discord Developer Portal > Bot > Privileged Gateway Intents", {});
+  } else {
+    log.error("Failed to login to Discord", { error: err.message });
+  }
   process.exit(1);
 });

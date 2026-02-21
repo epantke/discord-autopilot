@@ -97,25 +97,6 @@ if command -v curl >/dev/null 2>&1; then
     DISCORD_USER=$(grep -o '"username":"[^"]*"' "$DISCORD_CHECK" | head -1 | cut -d'"' -f4)
     ok "Discord bot: $DISCORD_USER"
 
-    # Check Message Content Intent via /applications/@me
-    DISCORD_APP=$(mktemp)
-    APP_HTTP=$(curl -s -o "$DISCORD_APP" -w "%{http_code}" \
-      -H @- "https://discord.com/api/v10/applications/@me" --max-time 10 2>/dev/null <<< "Authorization: Bot $DISCORD_TOKEN")
-    if [[ "$APP_HTTP" == "200" ]]; then
-      APP_FLAGS=$(grep -o '"flags":[0-9]*' "$DISCORD_APP" | head -1 | grep -o '[0-9]*$')
-      if [[ -n "$APP_FLAGS" ]]; then
-        # GatewayMessageContent = 1<<18 (262144), Limited = 1<<19 (524288)
-        HAS_MSG_CONTENT=$(( (APP_FLAGS & 262144) | (APP_FLAGS & 524288) ))
-        if [[ "$HAS_MSG_CONTENT" -ne 0 ]]; then
-          ok "Message Content Intent: enabled"
-        else
-          warn "Message Content Intent: NOT enabled"
-          warn "  Enable it: Discord Developer Portal > Bot > Privileged Gateway Intents"
-        fi
-      fi
-    fi
-    rm -f "$DISCORD_APP"
-
     # Check if bot is in any guilds
     DISCORD_GUILDS=$(mktemp)
     GUILDS_HTTP=$(curl -s -o "$DISCORD_GUILDS" -w "%{http_code}" \

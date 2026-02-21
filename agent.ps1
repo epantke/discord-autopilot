@@ -521,24 +521,6 @@ try {
     }
     Write-Check 'Discord Bot' $botName $true
 
-    # Check privileged intents via /applications/@me
-    try {
-        $appInfo = Invoke-RestMethod -Uri 'https://discord.com/api/v10/applications/@me' -Headers $discordHeaders -TimeoutSec 10 -ErrorAction Stop
-        $flags = [long]($appInfo.flags)
-        # GatewayMessageContent = 1 << 18 (262144), GatewayMessageContentLimited = 1 << 19 (524288)
-        $hasMessageContent = ($flags -band 262144) -ne 0 -or ($flags -band 524288) -ne 0
-        if ($hasMessageContent) {
-            Write-Check 'Message Intent' 'enabled' $true
-        } else {
-            Write-Check 'Message Intent' 'NOT enabled' $false
-            Write-Warn '  The bot needs Message Content Intent to read messages.'
-            Write-Warn '  Enable it: Discord Developer Portal > Bot > Privileged Gateway Intents'
-        }
-    } catch {
-        Write-Check 'Message Intent' 'could not verify (API error)' $false
-        Write-Warn '  Check manually: Developer Portal > Bot > Privileged Gateway Intents'
-    }
-
     # Check if bot is in any guilds
     try {
         $guilds = Invoke-RestMethod -Uri 'https://discord.com/api/v10/users/@me/guilds?limit=1' -Headers $discordHeaders -TimeoutSec 10 -ErrorAction Stop
