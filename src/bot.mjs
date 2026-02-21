@@ -13,7 +13,6 @@ import {
   Routes,
   SlashCommandBuilder,
   EmbedBuilder,
-  AttachmentBuilder,
 } from "discord.js";
 
 import {
@@ -48,15 +47,10 @@ import {
   hardStop,
   pauseSession,
   resumeSession,
-  clearQueue,
-  getQueueInfo,
-  getTaskHistory,
-  getActiveSessionCount,
   isAwaitingQuestion,
   addChannelResponder,
   removeChannelResponder,
   getChannelResponders,
-  updateBranch,
   changeModel,
   listAvailableModels,
 } from "./session-manager.mjs";
@@ -65,7 +59,6 @@ import { addGrant, revokeGrant, startGrantCleanup, restoreGrants } from "./grant
 import {
   closeDb,
   getAllSessions,
-  getTaskStats,
   getStaleSessions,
   getStaleRunningTasks,
   markStaleTasksAborted,
@@ -86,17 +79,6 @@ const log = createLogger("bot");
 // ── Slash Commands Definition ───────────────────────────────────────────────
 
 const commands = [
-  new SlashCommandBuilder()
-    .setName("task")
-    .setDescription("Send a task to the coding agent")
-    .addStringOption((opt) =>
-      opt.setName("prompt").setDescription("Task description").setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("status")
-    .setDescription("Show current agent session status"),
-
   new SlashCommandBuilder()
     .setName("grant")
     .setDescription("Grant agent access to a path outside workspace")
@@ -155,73 +137,9 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
-    .setName("queue")
-    .setDescription("View or manage the task queue")
-    .addStringOption((opt) =>
-      opt
-        .setName("action")
-        .setDescription("What to do")
-        .addChoices(
-          { name: "List pending tasks", value: "list" },
-          { name: "Clear all pending tasks", value: "clear" }
-        )
-    ),
-
-  new SlashCommandBuilder()
-    .setName("history")
-    .setDescription("Show recent task history")
-    .addIntegerOption((opt) =>
-      opt
-        .setName("limit")
-        .setDescription("Number of tasks to show (default: 10)")
-        .setMinValue(1)
-        .setMaxValue(50)
-    ),
-
-  new SlashCommandBuilder()
     .setName("config")
     .setDescription("View current bot configuration")
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-
-  new SlashCommandBuilder()
-    .setName("diff")
-    .setDescription("Show git diff for the agent workspace")
-    .addStringOption((opt) =>
-      opt
-        .setName("mode")
-        .setDescription("Diff mode")
-        .addChoices(
-          { name: "Summary (stat)", value: "stat" },
-          { name: "Full diff", value: "full" },
-          { name: "Staged only", value: "staged" }
-        )
-    ),
-
-  new SlashCommandBuilder()
-    .setName("branch")
-    .setDescription("Manage agent branches")
-    .addStringOption((opt) =>
-      opt
-        .setName("action")
-        .setDescription("What to do")
-        .addChoices(
-          { name: "List branches", value: "list" },
-          { name: "Show current branch", value: "current" },
-          { name: "Create new branch", value: "create" },
-          { name: "Switch branch", value: "switch" }
-        )
-    )
-    .addStringOption((opt) =>
-      opt.setName("name").setDescription("Branch name (for create/switch)").setAutocomplete(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("help")
-    .setDescription("Show all available bot commands"),
-
-  new SlashCommandBuilder()
-    .setName("stats")
-    .setDescription("Show bot statistics and uptime"),
 
   new SlashCommandBuilder()
     .setName("update")
@@ -431,7 +349,7 @@ client.once(Events.ClientReady, async () => {
 
   // ── Bot Presence ────────────────────────────────────────────────────────
   client.user.setPresence({
-    activities: [{ name: `v${CURRENT_VERSION} · /task`, type: ActivityType.Watching }],
+    activities: [{ name: `v${CURRENT_VERSION} · @me`, type: ActivityType.Watching }],
     status: "online",
   });
 
@@ -835,11 +753,10 @@ function startUpdateChecker() {
 // ── Interaction Handler ─────────────────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
-  // Branch name autocomplete
+  // Model name autocomplete
   if (interaction.isAutocomplete()) {
-    const focused = interaction.options.getFocused();
-
     if (interaction.commandName === "model") {
+      const focused = interaction.options.getFocused();
       try {
         const models = await listAvailableModels();
         const filtered = models
@@ -849,22 +766,6 @@ client.on("interactionCreate", async (interaction) => {
       } catch {
         await interaction.respond([]).catch(() => {});
       }
-      return;
-    }
-
-    if (interaction.commandName !== "branch") return;
-    const channelId = interaction.channelId;
-    const status = getSessionStatus(channelId);
-    if (!status) return interaction.respond([]).catch(() => {});
-    try {
-      const { stdout } = await execFileAsync("git", ["branch", "--list", "--format=%(refname:short)"], {
-        cwd: status.workspace, encoding: "utf-8", timeout: 5_000,
-      });
-      const branches = stdout.trim().split("\n").filter(Boolean);
-      const filtered = branches.filter((b) => b.toLowerCase().includes(focused.toLowerCase())).slice(0, 25);
-      await interaction.respond(filtered.map((b) => ({ name: b, value: b })));
-    } catch {
-      await interaction.respond([]).catch(() => {});
     }
     return;
   }
@@ -895,90 +796,6 @@ client.on("interactionCreate", async (interaction) => {
 
   try {
     switch (commandName) {
-      // ── /task ─────────────────────────────────────────────────────────
-      case "task": {
-        const prompt = interaction.options.getString("prompt");
-        // Show queue position if there are other tasks ahead
-        const queueInfo = getQueueInfo(channelId);
-        const pos = queueInfo?.length || 0;
-        const posHint = pos > 0 ? ` *(queue position: ${pos + 1})*` : "";
-        await interaction.reply(`📋 **Task queued:** ${prompt}${posHint}`);
-
-        // Create a thread for this task's output — fall back to channel on failure
-        let outputChannel = channel;
-        try {
-          const reply = await interaction.fetchReply();
-          const thread = await reply.startThread({
-            name: `Task: ${prompt.slice(0, 90)}`,
-            autoArchiveDuration: 1440,
-          });
-          outputChannel = thread;
-        } catch (err) {
-          log.warn("Failed to create thread, using channel", { error: err.message });
-        }
-
-        // Fire and forget — streaming output handled by session manager.
-        // processQueue already reports task errors via output.finish(),
-        // so only show pre-queue errors (queue full, prompt too long, session creation failure).
-        enqueueTask(channelId, channel, prompt, outputChannel, { id: interaction.user.id, tag: interaction.user.tag }).catch((err) => {
-          if (err._reportedByOutput) return;
-          outputChannel
-            .send(`❌ **Task failed:** ${redactSecrets(err.message).clean}`)
-            .catch(() => {});
-        });
-        break;
-      }
-
-      // ── /status ───────────────────────────────────────────────────────
-      case "status": {
-        const status = getSessionStatus(channelId);
-        if (!status) {
-          await interaction.reply({
-            content: "No active session for this channel. Use `/task` to start one.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        const grantLines = status.grants.length
-          ? status.grants
-              .map((g) => `\`${g.path}\` (${g.mode}, ${g.expiresIn}min left)`)
-              .join("\n")
-          : "None";
-
-        const fields = [
-          { name: "Status", value: status.paused ? `${status.status} (⏸ paused)` : status.status, inline: true },
-          { name: "Branch", value: status.branch, inline: true },
-          { name: "Model", value: status.model || "*(default)*", inline: true },
-          { name: "Queue", value: `${status.queueLength} pending`, inline: true },
-        ];
-        if (status.currentPrompt) {
-          const snippet = status.currentPrompt.length > 100 ? status.currentPrompt.slice(0, 100) + "…" : status.currentPrompt;
-          fields.push({ name: "Current Task", value: snippet, inline: false });
-        }
-        fields.push(
-          { name: "Workspace", value: `\`${status.workspace}\``, inline: false },
-          { name: "Active Grants", value: grantLines, inline: false }
-        );
-
-        const embed = new EmbedBuilder()
-          .setTitle("📊 Agent Status")
-          .setColor(
-            status.paused
-              ? 0xff6600
-              : status.status === "working"
-                ? 0x3498db
-                : status.status === "idle"
-                  ? 0x2ecc71
-                  : 0xff9900
-          )
-          .addFields(...fields)
-          .setTimestamp();
-
-        await interaction.reply({ embeds: [embed] });
-        break;
-      }
-
       // ── /grant ────────────────────────────────────────────────────────
       case "grant": {
         const grantPath = interaction.options.getString("path");
@@ -1081,95 +898,6 @@ client.on("interactionCreate", async (interaction) => {
         break;
       }
 
-      // ── /queue ────────────────────────────────────────────────────────
-      case "queue": {
-        const action = interaction.options.getString("action") || "list";
-
-        if (action === "clear") {
-          const result = clearQueue(channelId);
-          if (!result.found) {
-            await interaction.reply({
-              content: "No active session.",
-              flags: MessageFlags.Ephemeral,
-            });
-            break;
-          }
-          await interaction.reply(
-            result.cleared > 0
-              ? `🗑 Cleared **${result.cleared}** pending task(s).`
-              : "Queue was already empty."
-          );
-          break;
-        }
-
-        // action === "list"
-        const info = getQueueInfo(channelId);
-        if (!info) {
-          await interaction.reply({
-            content: "No active session. Use `/task` to start one.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        if (info.length === 0) {
-          await interaction.reply({
-            content: `Queue is empty.${info.paused ? " *(paused)*" : ""}`,
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        const lines = info.items.map(
-          (item) => `**${item.index}.** ${item.prompt}${item.prompt.length >= 100 ? "…" : ""}${item.userTag ? ` *(${item.userTag})*` : ""}`
-        );
-        let description = lines.join("\n");
-        if (description.length > 4000) {
-          description = description.slice(0, 4000) + "\n…(truncated)";
-        }
-        const embed = new EmbedBuilder()
-          .setTitle(`📋 Task Queue (${info.length} pending)`)
-          .setColor(info.paused ? 0xff6600 : 0x3498db)
-          .setDescription(description)
-          .setFooter({ text: info.paused ? "⏸ Queue is paused" : "Queue is active" });
-        await interaction.reply({ embeds: [embed] });
-        break;
-      }
-
-      // ── /history ──────────────────────────────────────────────────────
-      case "history": {
-        const limit = interaction.options.getInteger("limit") || 10;
-        const tasks = getTaskHistory(channelId, limit);
-
-        if (tasks.length === 0) {
-          await interaction.reply({
-            content: "No task history for this channel.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        const statusIcon = { completed: "✅", failed: "❌", running: "⏳", aborted: "🛑" };
-        const lines = tasks.map((t) => {
-          const icon = statusIcon[t.status] || "❔";
-          const prompt = t.prompt.length > 60 ? t.prompt.slice(0, 60) + "…" : t.prompt;
-          const time = t.started_at ? `<t:${Math.floor(new Date(t.started_at + "Z").getTime() / 1000)}:R>` : "";
-          return `${icon} ${prompt} ${time}`;
-        });
-
-        let historyDesc = lines.join("\n");
-        if (historyDesc.length > 4000) {
-          historyDesc = historyDesc.slice(0, 4000) + "\n…(truncated)";
-        }
-        const embed = new EmbedBuilder()
-          .setTitle(`📜 Task History (last ${tasks.length})`)
-          .setColor(0x9b59b6)
-          .setDescription(historyDesc)
-          .setTimestamp();
-        await interaction.reply({ embeds: [embed] });
-        break;
-      }
-
       // ── /config ───────────────────────────────────────────────────────
       case "config": {
         const embed = new EmbedBuilder()
@@ -1204,196 +932,6 @@ client.on("interactionCreate", async (interaction) => {
           )
           .setTimestamp();
         await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
-        break;
-      }
-
-      // ── /diff ─────────────────────────────────────────────────────────
-      case "diff": {
-        const status = getSessionStatus(channelId);
-        if (!status) {
-          await interaction.reply({
-            content: "No active session. Use `/task` first.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        const mode = interaction.options.getString("mode") || "stat";
-        const gitArgs =
-          mode === "stat"
-            ? ["diff", "--stat"]
-            : mode === "staged"
-              ? ["diff", "--cached"]
-              : ["diff"];
-
-        await interaction.deferReply();
-
-        try {
-          const { stdout } = await execFileAsync("git", gitArgs, {
-            cwd: status.workspace,
-            encoding: "utf-8",
-            timeout: 15_000,
-          });
-
-          if (!stdout.trim()) {
-            await interaction.editReply("No changes.");
-            break;
-          }
-
-          const clean = redactSecrets(stdout).clean;
-
-          if (clean.length <= 1900) {
-            await interaction.editReply(`\`\`\`diff\n${clean}\n\`\`\``);
-          } else {
-            const attachment = new AttachmentBuilder(Buffer.from(clean, "utf-8"), {
-              name: "diff.txt",
-              description: `git diff (${mode})`,
-            });
-            await interaction.editReply({ files: [attachment] });
-          }
-        } catch (err) {
-          await interaction.editReply(`❌ \`git ${gitArgs.join(" ")}\` failed: ${redactSecrets(err.message).clean}`);
-        }
-        break;
-      }
-
-      // ── /branch ───────────────────────────────────────────────────────
-      case "branch": {
-        const status = getSessionStatus(channelId);
-        if (!status) {
-          await interaction.reply({
-            content: "No active session. Use `/task` first.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        const action = interaction.options.getString("action") || "current";
-        const branchName = interaction.options.getString("name");
-
-        if (action === "current") {
-          await interaction.reply(`Current branch: \`${status.branch}\``);
-          break;
-        }
-
-        if (action === "list") {
-          try {
-            const { stdout } = await execFileAsync("git", ["branch", "--list"], {
-              cwd: status.workspace,
-              encoding: "utf-8",
-              timeout: 5_000,
-            });
-            await interaction.reply(`\`\`\`\n${redactSecrets(stdout.trim()).clean}\n\`\`\``);
-          } catch (err) {
-            await interaction.reply(`❌ Failed: ${redactSecrets(err.message).clean}`);
-          }
-          break;
-        }
-
-        if (!branchName) {
-          await interaction.reply({
-            content: `Please provide a branch name for \`${action}\`.`,
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        // Sanitize branch name: only allow safe characters
-        if (!/^[\w.\/-]{1,100}$/.test(branchName)) {
-          await interaction.reply({
-            content: "\u26A0\uFE0F Invalid branch name. Only letters, digits, `.`, `/`, `-`, `_` are allowed (max 100 chars).",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        // Guard: no branch operations while working
-        if (status.status === "working") {
-          await interaction.reply({
-            content: "⚠️ Cannot switch/create branches while a task is running. Use `/stop` first.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        await interaction.deferReply();
-
-        if (action === "create") {
-          try {
-            await execFileAsync("git", ["checkout", "-b", branchName], {
-              cwd: status.workspace,
-              encoding: "utf-8",
-              timeout: 10_000,
-            });
-            updateBranch(channelId, branchName);
-            await interaction.editReply(`✅ Created and switched to branch \`${branchName}\`.`);
-          } catch (err) {
-            await interaction.editReply(`❌ Failed: ${redactSecrets(err.message).clean}`);
-          }
-          break;
-        }
-
-        if (action === "switch") {
-          try {
-            await execFileAsync("git", ["checkout", branchName], {
-              cwd: status.workspace,
-              encoding: "utf-8",
-              timeout: 10_000,
-            });
-            updateBranch(channelId, branchName);
-            await interaction.editReply(`✅ Switched to branch \`${branchName}\`.`);
-          } catch (err) {
-            await interaction.editReply(`❌ Failed: ${redactSecrets(err.message).clean}`);
-          }
-          break;
-        }
-        break;
-      }
-
-      // ── /help ─────────────────────────────────────────────────────────
-      case "help": {
-        const embed = new EmbedBuilder()
-          .setTitle("📖 Bot Commands")
-          .setColor(0x3498db)
-          .setDescription(
-            commands
-              .filter((c) => c.name !== "help")
-              .map((c) => `**/${c.name}** — ${c.description}`)
-              .join("\n")
-          )
-          .setFooter({ text: `${commands.length} commands available · v${CURRENT_VERSION}` })
-          .setTimestamp();
-        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
-        break;
-      }
-
-      // ── /stats ────────────────────────────────────────────────────────
-      case "stats": {
-        const stats = getTaskStats();
-        const uptime = process.uptime();
-        const days = Math.floor(uptime / 86400);
-        const hours = Math.floor((uptime % 86400) / 3600);
-        const mins = Math.floor((uptime % 3600) / 60);
-        const uptimeStr = days > 0
-          ? `${days}d ${hours}h ${mins}m`
-          : hours > 0
-            ? `${hours}h ${mins}m`
-            : `${mins}m`;
-
-        const embed = new EmbedBuilder()
-          .setTitle("📈 Bot Statistics")
-          .setColor(0x2ecc71)
-          .addFields(
-            { name: "Version", value: `v${CURRENT_VERSION}`, inline: true },
-            { name: "Uptime", value: uptimeStr, inline: true },
-            { name: "Active Sessions", value: String(getActiveSessionCount()), inline: true },
-            { name: "Tasks Total", value: String(stats.total), inline: true },
-            { name: "✅ Completed", value: String(stats.completed), inline: true },
-            { name: "❌ Failed", value: String(stats.failed), inline: true },
-            { name: "🛑 Aborted", value: String(stats.aborted), inline: true },
-          )
-          .setTimestamp();
-        await interaction.reply({ embeds: [embed] });
         break;
       }
 
