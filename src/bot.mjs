@@ -1346,6 +1346,13 @@ client.on("messageCreate", async (message) => {
 async function shutdown(signal) {
   log.info("Shutting down", { signal });
 
+  // Hard deadline: force exit if cleanup takes too long
+  const forceTimer = setTimeout(() => {
+    log.error("Shutdown timed out after 15s, forcing exit");
+    process.exit(1);
+  }, 15_000);
+  forceTimer.unref();
+
   // Send shutdown notification before destroying the client
   const shutdownEmbed = new EmbedBuilder()
     .setColor(0xe74c3c)
@@ -1374,6 +1381,25 @@ async function shutdown(signal) {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+// Prevent double-shutdown on repeated signals
+let _shuttingDown = false;
+const _origShutdown = shutdown;
+const safeShutdown = async (signal) => {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  await _origShutdown(signal);
+};
+process.removeAllListeners("SIGINT");
+process.removeAllListeners("SIGTERM");
+process.on("SIGINT", () => safeShutdown("SIGINT"));
+process.on("SIGTERM", () => safeShutdown("SIGTERM"));
+
+process.on("uncaughtException", (err) => {
+  log.error("Uncaught exception — shutting down", { error: err?.message || String(err), stack: err?.stack });
+  safeShutdown("uncaughtException").finally(() => process.exit(1));
+});
+
 process.on("unhandledRejection", (err) => {
   log.error("Unhandled rejection", { error: err?.message || String(err) });
 });

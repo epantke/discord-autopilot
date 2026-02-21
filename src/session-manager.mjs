@@ -279,6 +279,8 @@ async function _createSession(channelId, channel) {
     currentPrompt: null,
     awaitingQuestion: false,
     _toolsCompleted: 0,
+    _taskStartedAt: null,
+    _needsRecreation: false,
     _lastActivity: Date.now(),
   };
 
@@ -359,9 +361,28 @@ async function processQueue(channelId, channel) {
 
   const { prompt, resolve, reject, outputChannel } = ctx.queue.shift();
 
+  // Verify worktree still exists before starting
+  if (!existsSync(ctx.workspacePath)) {
+    log.error("Worktree directory missing, resetting session", { channelId, path: ctx.workspacePath });
+    const err = new Error("Workspace directory was deleted. Session has been reset — please retry.");
+    err._reportedByOutput = true;
+    reject(err);
+    // Reject remaining queue items too
+    for (const item of ctx.queue) {
+      const e = new Error("Session reset due to missing workspace");
+      e._reportedByOutput = true;
+      item.reject(e);
+    }
+    ctx.queue = [];
+    sessions.delete(channelId);
+    try { dbDeleteSession(channelId); } catch {}
+    return;
+  }
+
   ctx.status = "working";
   ctx.currentPrompt = prompt;
   ctx._toolsCompleted = 0;
+  ctx._taskStartedAt = Date.now();
   updateSessionStatus(channelId, "working");
   ctx.output = new DiscordOutput(outputChannel);
   ctx.taskId = insertTask(channelId, prompt);
@@ -373,8 +394,6 @@ async function processQueue(channelId, channel) {
   typingInterval.unref();
 
   try {
-    // IMPORTANT: timeout is the 2nd argument to sendAndWait(), NOT a property of the options object.
-    // The SDK signature is: sendAndWait(options, timeout?) — default is 60s if not passed.
     const response = await ctx.copilotSession.sendAndWait({ prompt }, TASK_TIMEOUT_MS);
     completeTask(ctx.taskId, "completed");
     log.info("Task completed", { channelId, taskId: ctx.taskId });
@@ -394,6 +413,16 @@ async function processQueue(channelId, channel) {
       ctx.status = "idle";
       updateSessionStatus(channelId, "idle");
     } else {
+      // Detect Copilot session death (process crash, connection lost)
+      const isFatal = err.message?.includes("EPIPE")
+        || err.message?.includes("ERR_IPC_CHANNEL_CLOSED")
+        || err.message?.includes("channel closed")
+        || err.message?.includes("process exited")
+        || err.message?.includes("not running");
+      if (isFatal) {
+        log.error("Copilot session died, marking for recreation", { channelId, error: err.message });
+        ctx._needsRecreation = true;
+      }
       completeTask(ctx.taskId, "failed");
       ctx.status = "idle";
       updateSessionStatus(channelId, "idle");
@@ -403,12 +432,86 @@ async function processQueue(channelId, channel) {
     reject(err);
   } finally {
     clearInterval(typingInterval);
+    // Safety net: ensure status is always reset even if catch block threw
+    if (ctx.status === "working") {
+      log.warn("processQueue finally: status still 'working', force-resetting", { channelId });
+      ctx.status = "idle";
+      try { updateSessionStatus(channelId, "idle"); } catch {}
+    }
     ctx.output = null;
     ctx.currentPrompt = null;
     ctx.awaitingQuestion = false;
+    ctx._taskStartedAt = null;
     ctx._lastActivity = Date.now();
+    // If Copilot session died, try to recreate it before processing next task
+    if (ctx._needsRecreation) {
+      ctx._needsRecreation = false;
+      try {
+        log.info("Recreating Copilot session after fatal error", { channelId });
+        try { ctx.copilotSession.destroy(); } catch {}
+        const botName = channel.client?.user?.username || "Autopilot";
+        ctx.copilotSession = await createAgentSession({
+          channelId,
+          workspacePath: ctx.workspacePath,
+          model: ctx.model,
+          botInfo: { botName, branch: ctx.branch },
+          onPushRequest: async (command) => createPushApprovalRequest(channel, ctx.workspacePath, command),
+          onOutsideRequest: (reason) => {
+            const c = sessions.get(channelId);
+            (c?.output?.channel || channel)
+              .send(`⛔ **Access Denied**\n${reason}\n\nUse \`/grant path:<absolute-path> mode:ro ttl:30\` to allow access.`)
+              .catch(() => {});
+          },
+          onDelta: (text) => sessions.get(channelId)?.output?.append(text),
+          onToolStart: (toolName) => {
+            const c = sessions.get(channelId);
+            if (!c) return;
+            const suffix = (c._toolsCompleted || 0) > 0 ? `  · ${c._toolsCompleted} done` : "";
+            c.output?.status(`🔧 \`${toolName}\`…${suffix}`);
+          },
+          onToolComplete: (toolName, success, error) => {
+            const c = sessions.get(channelId);
+            if (!c) return;
+            c._toolsCompleted = (c._toolsCompleted || 0) + 1;
+            if (!success && error) c.output?.append(`\n❌ \`${toolName}\`: ${error}\n`);
+            const icon = success ? "✅" : "❌";
+            c.output?.status(`${icon} \`${toolName}\`  · ${c._toolsCompleted} tool${c._toolsCompleted !== 1 ? "s" : ""} done`);
+          },
+          onIdle: () => {},
+          onUserQuestion: async (question, choices) => {
+            const c = sessions.get(channelId);
+            if (c) c.awaitingQuestion = true;
+            const target = c?.output?.channel || channel;
+            await target.send(`❓ **Agent asks:**\n${question}` + (choices ? `\nOptions: ${choices.join(", ")}` : ""));
+            try {
+              const collected = await target.awaitMessages({
+                max: 1, time: 300_000,
+                filter: (m) => {
+                  if (m.author.bot) return false;
+                  if (ADMIN_USER_ID && m.author.id === ADMIN_USER_ID) return true;
+                  if (ADMIN_ROLE_IDS && m.member?.roles?.cache) {
+                    if ([...ADMIN_ROLE_IDS].some((id) => m.member.roles.cache.has(id))) return true;
+                  }
+                  const responders = getChannelResponders(channelId);
+                  if (responders.size > 0) return responders.has(m.author.id);
+                  if (!ADMIN_ROLE_IDS) return true;
+                  return false;
+                },
+              });
+              return collected.first()?.content || "No answer provided.";
+            } catch { return "No answer provided within timeout."; }
+            finally { if (c) c.awaitingQuestion = false; }
+          },
+        });
+        log.info("Copilot session recreated successfully", { channelId });
+      } catch (recreateErr) {
+        log.error("Failed to recreate Copilot session", { channelId, error: recreateErr.message });
+        // Session is broken — remove it so next task creates a fresh one
+        sessions.delete(channelId);
+      }
+    }
     // Continue queue unless paused (use setImmediate to avoid stack overflow)
-    if (!ctx.paused) {
+    if (!ctx.paused && sessions.has(channelId)) {
       setImmediate(() => processQueue(channelId, channel));
     }
   }
@@ -674,7 +777,6 @@ const _idleSweep = setInterval(() => {
   for (const [channelId, ctx] of sessions) {
     if (ctx.status !== "idle") continue;
     if (ctx.queue.length > 0) continue;
-    // Track last activity — fall back to creation time
     const idle = now - (ctx._lastActivity || 0);
     if (idle >= IDLE_SWEEP_MS) {
       try { ctx.copilotSession.destroy(); } catch {}
@@ -686,8 +788,41 @@ const _idleSweep = setInterval(() => {
       log.info("Idle session swept", { channelId });
     }
   }
-  // Prune old task history
   const pruned = pruneOldTasks();
   if (pruned > 0) log.info("Pruned old tasks", { count: pruned });
 }, IDLE_SWEEP_MS);
 _idleSweep.unref();
+
+// ── Stuck Session Watchdog ──────────────────────────────────────────────────
+// Detects sessions stuck in "working" beyond TASK_TIMEOUT_MS + grace period
+// and force-recovers them so the queue isn't permanently blocked.
+
+const STUCK_GRACE_MS = 120_000; // 2 min grace after timeout
+const _stuckWatchdog = setInterval(() => {
+  const now = Date.now();
+  for (const [channelId, ctx] of sessions) {
+    if (ctx.status !== "working") continue;
+    const elapsed = now - (ctx._taskStartedAt || ctx._lastActivity || 0);
+    if (elapsed > TASK_TIMEOUT_MS + STUCK_GRACE_MS) {
+      log.error("Stuck session detected, force-recovering", {
+        channelId, elapsed, taskId: ctx.taskId,
+      });
+      // Force-abort and reset state
+      try { ctx.copilotSession.abort(); } catch {}
+      if (ctx.taskId) {
+        try { completeTask(ctx.taskId, "aborted"); } catch {}
+        ctx.taskId = null;
+      }
+      ctx.output?.finish("⚠️ **Session recovered** — task was stuck and has been aborted.").catch(() => {});
+      ctx.output = null;
+      ctx.status = "idle";
+      ctx.currentPrompt = null;
+      ctx.awaitingQuestion = false;
+      ctx._aborted = false;
+      try { updateSessionStatus(channelId, "idle"); } catch {}
+      ctx._lastActivity = now;
+      log.info("Stuck session recovered", { channelId });
+    }
+  }
+}, 60_000); // Check every 60s
+_stuckWatchdog.unref();

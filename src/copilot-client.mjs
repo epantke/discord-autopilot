@@ -89,7 +89,8 @@ export async function createAgentSession(opts) {
     ...(model ? { model } : {}),
   };
 
-  const session = await copilot.createSession({
+  const session = await Promise.race([
+    copilot.createSession({
     ...sessionConfig,
 
     // Approve all native permission requests (our policy is in onPreToolUse)
@@ -182,7 +183,12 @@ export async function createAgentSession(opts) {
             "6. Provide clear summaries of what you changed and why.",
           ].join("\n"),
     },
-  });
+  }),
+    new Promise((_, reject) => {
+      const t = setTimeout(() => reject(new Error("Copilot session creation timed out after 60s")), 60_000);
+      t.unref();
+    }),
+  ]);
 
   // Wire up streaming events
   let _lastToolName = "tool";

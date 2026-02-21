@@ -131,8 +131,8 @@ export class DiscordOutput {
       }
     } catch (err) {
       log.error("Flush failed", { error: err.message, code: err.code });
-      // If edit fails (message deleted etc.), try a new message
-      if (err.code === 10008 || err.code === 50005) {
+      // If message was deleted, channel is gone, or permissions changed — start fresh
+      if (err.code === 10008 || err.code === 50005 || err.code === 50001 || err.code === 50013) {
         this.message = null;
         try {
           const footer = this._statusFooter ? `\n${this._statusFooter}` : "";
@@ -146,7 +146,9 @@ export class DiscordOutput {
             this._statusFooter = "";
           }
         } catch (retryErr) {
-          log.error("Flush retry also failed", { error: retryErr.message, code: retryErr.code });
+          log.error("Flush retry also failed — giving up on this message", { error: retryErr.message, code: retryErr.code });
+          // Don't retry further — prevent infinite retry loops
+          this.message = null;
         }
       }
     } finally {
