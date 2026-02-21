@@ -208,12 +208,8 @@ async function _createSession(channelId, channel) {
     },
 
     onIdle: () => {
-      const ctx = sessions.get(channelId);
-      if (ctx) {
-        ctx.output?.finish("✨ **Task complete.**");
-        ctx.status = "idle";
-        updateSessionStatus(channelId, "idle");
-      }
+      // Status transitions and output.finish() are handled by processQueue.
+      // This callback is intentionally empty to avoid duplicate "Task complete" messages.
     },
 
     onUserQuestion: async (question, choices) => {
@@ -376,16 +372,10 @@ async function processQueue(channelId, channel) {
   const typingInterval = setInterval(() => outputChannel.sendTyping().catch(() => {}), 8_000);
   typingInterval.unref();
 
-  let timeoutTimer;
   try {
-    const timeout = new Promise((_, rej) => {
-      timeoutTimer = setTimeout(() => rej(new Error("Task timed out")), TASK_TIMEOUT_MS);
-      timeoutTimer.unref();
-    });
-    const taskPromise = ctx.copilotSession.sendAndWait({ prompt, timeout: TASK_TIMEOUT_MS });
-    taskPromise.catch(() => {}); // prevent unhandled rejection if timeout wins
-    const response = await Promise.race([taskPromise, timeout]);
-    clearTimeout(timeoutTimer);
+    // IMPORTANT: timeout is the 2nd argument to sendAndWait(), NOT a property of the options object.
+    // The SDK signature is: sendAndWait(options, timeout?) — default is 60s if not passed.
+    const response = await ctx.copilotSession.sendAndWait({ prompt }, TASK_TIMEOUT_MS);
     completeTask(ctx.taskId, "completed");
     log.info("Task completed", { channelId, taskId: ctx.taskId });
     ctx.status = "idle";
@@ -393,11 +383,10 @@ async function processQueue(channelId, channel) {
     await ctx.output?.finish("✨ **Task complete.**");
     resolve(response);
   } catch (err) {
-    clearTimeout(timeoutTimer);
     // If aborted via /stop, cleanup was already handled
     if (ctx._aborted) {
       ctx._aborted = false;
-    } else if (err.message === "Task timed out") {
+    } else if (err.message?.includes("Timeout") && err.message?.includes("session.idle")) {
       log.warn("Task timed out", { channelId, taskId: ctx.taskId, timeoutMs: TASK_TIMEOUT_MS });
       try { ctx.copilotSession.abort(); } catch {}
       completeTask(ctx.taskId, "aborted");
@@ -416,6 +405,7 @@ async function processQueue(channelId, channel) {
     clearInterval(typingInterval);
     ctx.output = null;
     ctx.currentPrompt = null;
+    ctx.awaitingQuestion = false;
     ctx._lastActivity = Date.now();
     // Continue queue unless paused (use setImmediate to avoid stack overflow)
     if (!ctx.paused) {
@@ -488,6 +478,7 @@ export function hardStop(channelId, clearQueue = true) {
 
   if (wasWorking) {
     ctx._aborted = true;
+    ctx.awaitingQuestion = false;
     try { ctx.copilotSession.abort(); } catch {}
     if (ctx.taskId) {
       completeTask(ctx.taskId, "aborted");
@@ -606,12 +597,7 @@ export async function changeModel(channelId, channel, newModel) {
       },
 
       onIdle: () => {
-        const c = sessions.get(channelId);
-        if (c) {
-          c.output?.finish("✨ **Task complete.**");
-          c.status = "idle";
-          updateSessionStatus(channelId, "idle");
-        }
+        // Status transitions and output.finish() are handled by processQueue.
       },
 
       onUserQuestion: async (question, choices) => {
