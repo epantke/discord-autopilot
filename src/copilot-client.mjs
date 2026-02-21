@@ -18,13 +18,17 @@ export function getCopilotClient() {
       useStdio: true,
       autoRestart: true,
     };
-    // Only pass githubToken for OAuth tokens (gho_) — classic PATs (ghp_) and
-    // fine-grained PATs (github_pat_) are rejected by the Copilot API.
-    // Without a token, the SDK falls back to `gh auth` credentials.
+    // The Copilot CLI subprocess inherits process.env. PATs (ghp_, github_pat_)
+    // are rejected by the Copilot API — if GITHUB_TOKEN is set to a PAT, the
+    // CLI will try to use it and fail silently, causing sendAndWait to hang.
+    // We must remove it from env so the CLI falls back to `gh auth` credentials.
     const token = process.env.GITHUB_TOKEN;
     if (token && token.startsWith("gho_")) {
       opts.githubToken = token;
-    } else if (token && !token.startsWith("ghp_") && !token.startsWith("github_pat_")) {
+    } else if (token && (token.startsWith("ghp_") || token.startsWith("github_pat_"))) {
+      delete process.env.GITHUB_TOKEN;
+      log.info("Cleared PAT from GITHUB_TOKEN env — Copilot CLI will use gh auth credentials");
+    } else if (token) {
       // Unknown token format — pass it through and let the SDK decide
       opts.githubToken = token;
     }
