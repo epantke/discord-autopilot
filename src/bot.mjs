@@ -22,6 +22,7 @@ import {
   ALLOWED_GUILDS,
   ALLOWED_CHANNELS,
   ADMIN_ROLE_IDS,
+  ALLOWED_DM_USERS,
   PROJECT_NAME,
   DISCORD_EDIT_THROTTLE_MS,
   DEFAULT_GRANT_MODE,
@@ -37,6 +38,7 @@ import {
   DEFAULT_MODEL,
   CURRENT_VERSION,
   UPDATE_CHECK_INTERVAL_MS,
+  AUTO_RETRY_ON_CRASH,
 } from "./config.mjs";
 
 import {
@@ -596,8 +598,10 @@ async function recoverFromPreviousErrors() {
 
   const abortedTasks = staleTasks.map((t) => ({
     channel_id: t.channel_id,
+    prompt: t.prompt,
     prompt_snippet: t.prompt.slice(0, 120),
     task_id: t.id,
+    user_id: t.user_id || null,
   }));
 
   const abortedCount = markStaleTasksAborted();
@@ -605,22 +609,87 @@ async function recoverFromPreviousErrors() {
 
   log.info("Recovery complete", { abortedTasks: abortedCount, resetSessions: resetCount });
 
-  // Notify affected channels (best-effort)
+  // Notify affected channels and offer retry (best-effort)
   const notifiedChannels = new Set();
   for (const task of abortedTasks) {
     if (notifiedChannels.has(task.channel_id)) continue;
     notifiedChannels.add(task.channel_id);
     try {
       const ch = await client.channels.fetch(task.channel_id);
-      if (ch?.isTextBased()) {
-        const snippet = task.prompt_snippet.length > 100 ? task.prompt_snippet.slice(0, 100) + "\u2026" : task.prompt_snippet;
+      if (!ch?.isTextBased()) continue;
+
+      const snippet = task.prompt_snippet.length > 100 ? task.prompt_snippet.slice(0, 100) + "\u2026" : task.prompt_snippet;
+
+      // ── Auto-retry: re-enqueue the task automatically ──────────────
+      if (AUTO_RETRY_ON_CRASH) {
         const embed = new EmbedBuilder()
-          .setTitle("\u26A0\uFE0F Bot Restarted — Task Aborted")
+          .setTitle("\u26A0\uFE0F Bot Restarted — Retrying Task")
           .setColor(0xffa500)
-          .setDescription(`The bot was restarted and your running task was interrupted.\n\n**Aborted task:** ${snippet}\n\nYou can re-submit the task with \`/task\`.`)
+          .setDescription(
+            `The bot was restarted and your running task was interrupted.\n\n` +
+            `**Aborted task:** ${snippet}\n\n` +
+            `\u{1F504} **Automatically re-submitting…**`
+          )
           .setTimestamp();
         await ch.send({ embeds: [embed] });
+
+        enqueueTask(task.channel_id, ch, task.prompt, ch, { id: task.user_id, tag: null }).catch((err) => {
+          log.warn("Auto-retry failed", { channelId: task.channel_id, error: err.message });
+          ch.send(`\u274C Auto-retry failed: ${redactSecrets(err.message).clean}`).catch(() => {});
+        });
+        log.info("Auto-retrying aborted task", { channelId: task.channel_id, taskId: task.task_id });
+        continue;
       }
+
+      // ── Manual retry: show button ──────────────────────────────────
+      const retryId = `retry_task_${task.channel_id}_${Date.now()}`;
+      const embed = new EmbedBuilder()
+        .setTitle("\u26A0\uFE0F Bot Restarted — Task Aborted")
+        .setColor(0xffa500)
+        .setDescription(
+          `The bot was restarted and your running task was interrupted.\n\n` +
+          `**Aborted task:** ${snippet}\n\n` +
+          `Click the button below to re-submit, or send a new message.`
+        )
+        .setTimestamp();
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(retryId)
+          .setLabel("\u{1F504} Retry Task")
+          .setStyle(ButtonStyle.Primary),
+      );
+
+      const msg = await ch.send({ embeds: [embed], components: [row] });
+
+      // Await button click with 10 min timeout (non-blocking — do not await the outer promise)
+      msg.awaitMessageComponent({
+        filter: (i) => {
+          if (i.customId !== retryId) return false;
+          if (ADMIN_USER_ID && i.user.id === ADMIN_USER_ID) return true;
+          if (task.user_id && i.user.id === task.user_id) return true;
+          if (ADMIN_ROLE_IDS && i.member?.roles?.cache) {
+            if ([...ADMIN_ROLE_IDS].some((id) => i.member.roles.cache.has(id))) return true;
+          }
+          i.reply({ content: "\u26D4 Only the task author or an admin can retry.", flags: MessageFlags.Ephemeral }).catch(() => {});
+          return false;
+        },
+        time: 600_000,
+      }).then(async (btn) => {
+        const retried = EmbedBuilder.from(embed)
+          .setTitle("\u{1F504} Retrying Task…")
+          .setColor(0x3498db)
+          .setFooter({ text: `Retried by ${btn.user.tag}` });
+        await btn.update({ embeds: [retried], components: [] }).catch(() => {});
+
+        enqueueTask(task.channel_id, ch, task.prompt, ch, { id: btn.user.id, tag: btn.user.tag }).catch((err) => {
+          ch.send(`\u274C Retry failed: ${redactSecrets(err.message).clean}`).catch(() => {});
+        });
+        log.info("Task retried via button", { channelId: task.channel_id, user: btn.user.tag });
+      }).catch(() => {
+        // Timeout or error — remove the button
+        msg.edit({ components: [] }).catch(() => {});
+      });
     } catch (err) {
       log.warn("Failed to notify channel about aborted task", { channelId: task.channel_id, error: err.message });
     }
@@ -1620,32 +1689,77 @@ client.on("messageCreate", async (message) => {
 
   const isDM = !message.guild;
 
-  // ── DM follow-ups: only allow if ADMIN_USER_ID matches the sender
+  // ── DM messages: new tasks + follow-ups ────────────────────────────────
   if (isDM) {
-    if (!ADMIN_USER_ID || message.author.id !== ADMIN_USER_ID) return;
-    const dmChannelId = message.channel.id;
-    const status = getSessionStatus(dmChannelId);
-    if (!status) return; // No active session in this DM — ignore
+    const userId = message.author.id;
+    const dmAllowed = (ADMIN_USER_ID && userId === ADMIN_USER_ID)
+      || (ALLOWED_DM_USERS && ALLOWED_DM_USERS.has(userId));
+    if (!dmAllowed) return;
 
-    // If the agent is waiting for a question answer, don't enqueue as follow-up
+    const dmChannelId = message.channel.id;
+
+    // If the agent is waiting for a question answer, don't enqueue as new task
     if (isAwaitingQuestion(dmChannelId)) return;
 
     const prompt = message.content.trim();
     if (!prompt) return;
 
-    // Rate-limit DM follow-ups (reuse interaction rate-limiter)
+    // Rate-limit DM messages
+    if (isDmRateLimited(userId)) {
+      message.react("⏳").catch(() => {});
+      return;
+    }
+
+    const status = getSessionStatus(dmChannelId);
+    log.info(status ? "Follow-up in DM" : "New task via DM", { channelId: dmChannelId, prompt: prompt.slice(0, 100) });
+    message.react("✅").catch(() => {});
+
+    enqueueTask(dmChannelId, message.channel, prompt, message.channel, { id: userId, tag: message.author.tag }).catch((err) => {
+      if (err._reportedByOutput) return;
+      message.channel
+        .send(`❌ **Task failed:** ${redactSecrets(err.message).clean}`)
+        .catch(() => {});
+    });
+    return;
+  }
+
+  // ── @mention in guild channels: start new task ──────────────────────────
+  if (!message.channel.isThread() && message.mentions.has(client.user)) {
+    if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(message.guildId)) return;
+    if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(message.channel.id)) return;
+    if (ADMIN_ROLE_IDS && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
+
+    // Strip the bot mention from the prompt
+    const prompt = message.content
+      .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
+      .trim();
+    if (!prompt) return;
+
     if (isDmRateLimited(message.author.id)) {
       message.react("⏳").catch(() => {});
       return;
     }
 
-    log.info("Follow-up in DM", { channelId: dmChannelId, prompt: prompt.slice(0, 100) });
+    const channelId = message.channel.id;
+    log.info("New task via @mention", { channelId, prompt: prompt.slice(0, 100) });
     message.react("✅").catch(() => {});
 
-    enqueueTask(dmChannelId, message.channel, prompt, message.channel, { id: message.author.id, tag: message.author.tag }).catch((err) => {
+    // Create a thread for this task
+    let outputChannel = message.channel;
+    try {
+      const thread = await message.startThread({
+        name: `Task: ${prompt.slice(0, 90)}`,
+        autoArchiveDuration: 1440,
+      });
+      outputChannel = thread;
+    } catch (err) {
+      log.warn("Failed to create thread for @mention task, using channel", { error: err.message });
+    }
+
+    enqueueTask(channelId, message.channel, prompt, outputChannel, { id: message.author.id, tag: message.author.tag }).catch((err) => {
       if (err._reportedByOutput) return;
-      message.channel
-        .send(`❌ **Follow-up failed:** ${redactSecrets(err.message).clean}`)
+      outputChannel
+        .send(`❌ **Task failed:** ${redactSecrets(err.message).clean}`)
         .catch(() => {});
     });
     return;
