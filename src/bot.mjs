@@ -351,15 +351,8 @@ function buildStartupEmbed({ envIssues, recoveryInfo } = {}) {
   const title = hasErrors ? "\u26A0\uFE0F Bot Online — Configuration Errors" : hasRecovery ? "\u{1F7E1} Bot Online — Recovered" : "\u{1F7E2} Bot Online";
 
   const embed = new EmbedBuilder()
-    .setTitle(title)
     .setColor(color)
-    .setDescription(`**${client.user.tag}** is ready and listening.`)
-    .addFields(
-      { name: "Project", value: PROJECT_NAME, inline: true },
-      { name: "Commands", value: `${commands.length} registered`, inline: true },
-      { name: "Repository", value: repoInfo, inline: false },
-    )
-    .setTimestamp();
+    .setDescription(`${title} — **${client.user.tag}** · ${PROJECT_NAME} · ${commands.length} cmds`);
 
   if (hasErrors) {
     embed.addFields({
