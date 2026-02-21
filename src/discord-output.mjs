@@ -103,16 +103,17 @@ export class DiscordOutput {
         this._cleanedContent = this._cleanedContent.slice(splitAt);
         this.content = this._cleanedContent;
 
+        if (!head) break;
         if (this.message) {
           await this.message.edit(head);
         } else {
-          await this.channel.send(head);
+          this.message = await this.channel.send(head);
         }
         this.message = null;
       }
 
       const displayText = this._cleanedContent + (footer ? redactSecrets(footer).clean : "");
-      if (!displayText) return;
+      if (!displayText.trim()) return;
 
       if (displayText.length <= 1990) {
         if (this.message) {
