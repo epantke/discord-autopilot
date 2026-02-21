@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH } from "./config.mjs";
@@ -70,7 +70,7 @@ function createWorktree(channelId) {
 
   try {
     // Create branch from HEAD
-    execSync(`git branch "${branchName}" HEAD`, {
+    execFileSync("git", ["branch", branchName, "HEAD"], {
       cwd: REPO_PATH,
       stdio: "pipe",
     });
@@ -79,7 +79,7 @@ function createWorktree(channelId) {
   }
 
   try {
-    execSync(`git worktree add "${worktreePath}" "${branchName}"`, {
+    execFileSync("git", ["worktree", "add", worktreePath, branchName], {
       cwd: REPO_PATH,
       stdio: "pipe",
     });

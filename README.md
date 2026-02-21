@@ -1,6 +1,6 @@
 <div align="center">
 
-# Discord Autopilot
+# Discord × Copilot — Discord Autopilot
 
 **Delegate coding tasks to an autonomous AI agent — right from Discord.**
 
@@ -159,7 +159,22 @@ src/
 
 ## Security
 
-The agent enforces **deny-by-default** security: all file/shell access outside the workspace is blocked, `git push` requires button approval, and secrets are auto-redacted before posting to Discord. Additional layers include symlink-safe path resolution, compound command scanning, RBAC, grant TTL with auto-revoke, and per-channel workspace isolation.
+The agent enforces **deny-by-default** security:
+
+- All file/shell access outside the workspace is blocked
+- `git push` requires Discord button approval (RBAC-protected, 10 min timeout)
+- Secrets are auto-redacted before posting to Discord (9 token patterns + ENV values)
+- Symlink-safe path resolution (`realpathSync`) before all boundary checks
+- Compound command scanning: `&&`, `||`, `;`, pipes, `sh -c`, `eval`, backticks, `$()`
+- Git push detection covers flags between `git` and `push`, env-variable prefixes
+- DM access restricted to `ADMIN_USER_ID` only
+- Tilde expansion (`cd ~`) blocked in shell commands
+- Grant TTL with auto-revoke — no permanent grants
+- All SQL uses prepared statements (no string interpolation)
+- `DISCORD_TOKEN` and PATs removed from `process.env` before Copilot subprocess
+- Branch name sanitization: `/^[\w.\/-]{1,100}$/`
+- Snowflake validation: Discord IDs checked as 17-20 digit strings
+- Per-user rate limiting on commands and follow-ups
 
 See the [full security breakdown](https://epantke.github.io/discord-autopilot/#security) for details.
 

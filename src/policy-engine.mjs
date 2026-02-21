@@ -184,7 +184,16 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
 
     // Scan for ALL cd's into paths outside workspace
     for (const cdMatch of cmd.matchAll(/\b(?:cd|pushd)\s+["']?([^\s"';&|]+)/g)) {
-      const cdTarget = resolve(workspaceRoot, cdMatch[1]);
+      const rawTarget = cdMatch[1];
+      // Block tilde expansion — shell expands ~ to home dir, bypassing resolve()
+      if (rawTarget === "~" || rawTarget.startsWith("~/")) {
+        return {
+          decision: "deny",
+          reason: `Shell cd with tilde expansion is not allowed: ${rawTarget}`,
+          gate: "outside",
+        };
+      }
+      const cdTarget = resolve(workspaceRoot, rawTarget);
       if (!isInsideWorkspace(cdTarget, workspaceRoot) && !isGranted(cdTarget, grants, "ro")) {
         return {
           decision: "deny",
