@@ -25,14 +25,14 @@ An autonomous AI coding agent controlled via Discord, powered by the GitHub Copi
 | `bot.mjs` | Discord client, message handler, admin slash commands, RBAC, rate limiting |
 | `config.mjs` | ENV parsing, Snowflake validation, constants |
 | `copilot-client.mjs` | Copilot SDK singleton, session factory, `onPreToolUse` policy hooks |
-| `session-manager.mjs` | Session lifecycle, git worktrees per channel, task queue (FIFO), heartbeat status |
+| `session-manager.mjs` | Session lifecycle, git worktrees per channel, task queue (FIFO), idle sweep |
 | `policy-engine.mjs` | Path validation (`realpathSync`), workspace boundary checks, git-push detection, grant checking |
 | `grants.mjs` | Grant CRUD, TTL with auto-revoke, in-memory + SQLite dual-store |
-| `state.mjs` | SQLite persistence, schema migrations (v0→v2), prepared statements |
+| `state.mjs` | SQLite persistence, schema migrations (v0→v4), prepared statements |
 | `discord-output.mjs` | Streaming output, throttled message edits, chunking, attachment fallback |
 | `push-approval.mjs` | Push gate with embed + buttons, approve/reject, 10 min timeout, RBAC |
 | `secret-scanner.mjs` | Token redaction (11 regex patterns + ENV value detection) |
-| `command-info.mjs` | Slash command definitions and self-awareness prompt fragment |
+| `command-info.mjs` | Self-awareness system prompt builder |
 | `updater.mjs` | GitHub release checker, auto-update notification |
 | `logger.mjs` | Structured JSON logging to stdout/stderr |
 
@@ -67,19 +67,6 @@ The second argument is a plain data object (not the error itself).
 ## Timers
 
 - Always call `.unref()` on `setInterval` / `setTimeout` handles to avoid blocking process exit
-
-## Security Posture
-
-This project enforces strict security boundaries — do not relax them:
-
-- **Deny-by-default**: all file/shell operations outside the workspace are blocked
-- **Symlink-safe path resolution**: always use `realpathSync()` before path comparisons
-- **Compound command scanning**: `git push` detection covers `&&`, `||`, `;`, pipes, `sh -c`, `eval`, backticks, `$()`
-- **Push approval gate**: `git push` is never auto-approved; requires Discord button confirmation
-- **Secret scanner**: all output to Discord passes through `redactSecrets()` before sending
-- **Grant TTL**: temporary path grants auto-expire; never create permanent grants
-- **Branch name sanitization**: only `/^[\w.\/-]{1,100}$/` allowed
-- **Snowflake validation**: Discord IDs validated as 17-20 digit strings
 
 ## Build & Deploy
 

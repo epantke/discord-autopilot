@@ -195,7 +195,7 @@ The agent enforces **deny-by-default** security:
 
 - All file/shell access outside the workspace is blocked
 - `git push` requires Discord button approval (RBAC-protected, 10 min timeout)
-- Outside-workspace access shows approve/deny buttons with read-only or read/write options
+- Outside-workspace access is blocked with a notification directing the user to use `/grant`
 - Secrets are auto-redacted before posting to Discord (11 token patterns + ENV values)
 - Symlink-safe path resolution (`realpathSync`) before all boundary checks
 - Compound command scanning: `&&`, `||`, `;`, pipes, `sh -c`, `eval`, backticks, `$()`

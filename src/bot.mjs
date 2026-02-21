@@ -1226,7 +1226,7 @@ const KNOWN_COMMANDS = new Set(commands.map((c) => c.name));
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  // Detect plain-text messages that look like slash commands (e.g. "/model", "/status")
+  // Detect plain-text messages that look like slash commands (e.g. "/model", "/config")
   const slashMatch = message.content.trim().match(/^\/([\w-]+)/);
   if (slashMatch && KNOWN_COMMANDS.has(slashMatch[1])) {
     message.reply(`💡 **\`/${slashMatch[1]}\`** is a slash command — type it in the message bar and pick it from the popup, or use it in a server channel (not as plain text).`).catch(() => {});
