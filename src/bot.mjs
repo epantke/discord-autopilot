@@ -838,7 +838,7 @@ client.on("interactionCreate", async (interaction) => {
       case "reset": {
         await interaction.deferReply();
         await resetSession(channelId);
-        await interaction.editReply("🔄 Session reset. Use `/task` to start a new one.");
+        await interaction.editReply("🔄 Session reset. @mention me or send a DM to start a new task.");
         break;
       }
 

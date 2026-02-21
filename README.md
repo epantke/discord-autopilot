@@ -24,9 +24,9 @@ Send a DM or @mention in Discord — the agent edits files, runs tests, commits,
 - 💬 **Conversational** — @mention or DM the bot, reply in threads for follow-ups
 - 📡 **Live streaming** — output streams into per-task Discord threads
 - 🔒 **Push approval gate** — `git push` & PR actions require human approval via buttons
-- 🔓 **Grant approval gate** — outside-workspace access prompts buttons (approve/deny)
+- 🔓 **Deny-by-default grants** — outside-workspace access is blocked and the user is prompted to use `/grant`
 - 🧵 **Thread follow-ups** — reply in a thread to continue the conversation
-- 👥 **Multi-user** — each user gets their own isolated workspace and session
+- 👥 **Multi-channel** — each channel or DM gets its own isolated workspace and session
 - ❓ **Ask-user** — agent can ask clarifying questions via Discord and wait for your answer
 - 🛡️ **Deny-by-default** — all access outside workspace blocked unless explicitly granted
 - 🔑 **Secret scanner** — auto-redacts tokens & keys before posting to Discord
@@ -132,7 +132,7 @@ Reply in any bot-owned thread to continue the conversation with additional instr
 1. **@mention or DM** → session manager provisions a git worktree
 2. **Agent works** — Copilot agent works autonomously; every tool call passes through the policy engine
 3. **Live stream** — output streams into a thread (channels) or directly (DMs); secrets are redacted
-4. **Approval gates** — `git push` triggers a button prompt; outside-workspace access requests show approve/deny buttons
+4. **Approval gates** — `git push` triggers a button prompt; outside-workspace access is denied with a notification to use `/grant`
 
 ## Architecture
 

@@ -54,6 +54,30 @@ export class DiscordOutput {
   }
 
   /**
+   * Finalize the current message and start fresh.
+   * Call before sending out-of-band messages (questions, push approval)
+   * so that subsequent deltas create a new Discord message.
+   */
+  async breakMessage() {
+    if (this.finished) return;
+    if (this.editTimer) {
+      clearTimeout(this.editTimer);
+      this.editTimer = null;
+    }
+    this.dirty = true;
+    try {
+      await this.flush();
+    } catch (err) {
+      log.error("breakMessage flush failed", { error: err.message });
+    }
+    this.message = null;
+    this._cleanedContent = "";
+    this._pendingContent = "";
+    this.content = "";
+    this._statusFooter = "";
+  }
+
+  /**
    * Final flush — send remaining content, send as attachment if too large.
    */
   async finish(epilogue = "") {
@@ -172,11 +196,14 @@ export class DiscordOutput {
   }
 
   /**
-   * Find a good split point near maxLen, preferring newline boundaries.
+   * Find a good split point near maxLen, preferring newline then word boundaries.
    */
   _findSplitPoint(text, maxLen) {
     const lastNewline = text.lastIndexOf("\n", maxLen);
     if (lastNewline > maxLen / 2) return lastNewline + 1;
+    // Fall back to word boundary (space)
+    const lastSpace = text.lastIndexOf(" ", maxLen);
+    if (lastSpace > maxLen * 0.7) return lastSpace + 1;
     return maxLen;
   }
 
