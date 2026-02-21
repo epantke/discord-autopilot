@@ -334,7 +334,22 @@ echo ""
 
 export PROJECT_NAME
 export REPO_PATH="$REPO_DIR"
-export ADMIN_USER_ID="${ADMIN_USER_ID:-}"
-export STARTUP_CHANNEL_ID="${STARTUP_CHANNEL_ID:-}"
+
+# Validate snowflake IDs (17-20 digits)
+if [[ -n "${ADMIN_USER_ID:-}" && ! "${ADMIN_USER_ID}" =~ ^[0-9]{17,20}$ ]]; then
+  warn "ADMIN_USER_ID '${ADMIN_USER_ID}' is not a valid Discord snowflake (must be 17-20 digits). Ignoring."
+  warn "  Copy your numeric ID: right-click your name in Discord → Copy User ID"
+  export ADMIN_USER_ID=""
+else
+  export ADMIN_USER_ID="${ADMIN_USER_ID:-}"
+fi
+
+if [[ -n "${STARTUP_CHANNEL_ID:-}" && ! "${STARTUP_CHANNEL_ID}" =~ ^[0-9]{17,20}$ ]]; then
+  warn "STARTUP_CHANNEL_ID '${STARTUP_CHANNEL_ID}' is not a valid Discord snowflake (must be 17-20 digits). Ignoring."
+  warn "  Copy the numeric ID: right-click a text channel in Discord → Copy Channel ID"
+  export STARTUP_CHANNEL_ID=""
+else
+  export STARTUP_CHANNEL_ID="${STARTUP_CHANNEL_ID:-}"
+fi
 
 exec node "$APP/src/bot.mjs"

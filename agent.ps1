@@ -268,14 +268,40 @@ if (-not $cfgAdmin) {
     Write-Host ''
     $cfgAdmin = Read-SecureInput 'Admin User ID (or Enter to skip)'
     if ($cfgAdmin) {
-        [Environment]::SetEnvironmentVariable('ADMIN_USER_ID', $cfgAdmin, 'Process')
-        $script:EnvChanged = $true
-        Write-Ok 'ADMIN_USER_ID set'
+        if ($cfgAdmin -notmatch '^\d{17,20}$') {
+            Write-Warn "'$cfgAdmin' is not a valid Discord User ID (must be 17-20 digits)."
+            Write-Warn '  That looks like a username. Discord IDs are numeric snowflakes.'
+            Write-Warn '  How to copy it: right-click your name in Discord > Copy User ID'
+            Write-Warn '  (requires Developer Mode: Settings > Advanced > Developer Mode ON)'
+            Write-Host ''
+            $retry = Read-Host "  $([char]0x25B8) Enter numeric User ID (or Enter to skip)"
+            if ($retry -and $retry -match '^\d{17,20}$') {
+                $cfgAdmin = $retry
+            } elseif ($retry) {
+                Write-Warn "'$retry' is still not a valid snowflake ID. Skipping ADMIN_USER_ID."
+                $cfgAdmin = $null
+            } else {
+                $cfgAdmin = $null
+            }
+        }
+        if ($cfgAdmin) {
+            [Environment]::SetEnvironmentVariable('ADMIN_USER_ID', $cfgAdmin, 'Process')
+            $script:EnvChanged = $true
+            Write-Ok 'ADMIN_USER_ID set'
+        } else {
+            Write-Info 'ADMIN_USER_ID skipped'
+        }
     } else {
         Write-Info 'ADMIN_USER_ID skipped'
     }
 } else {
-    Write-Ok "ADMIN_USER_ID found ($cfgAdmin)"
+    if ($cfgAdmin -notmatch '^\d{17,20}$') {
+        Write-Warn "ADMIN_USER_ID '$cfgAdmin' is not a valid snowflake (must be 17-20 digits). Ignoring."
+        [Environment]::SetEnvironmentVariable('ADMIN_USER_ID', $null, 'Process')
+        $cfgAdmin = $null
+    } else {
+        Write-Ok "ADMIN_USER_ID found ($cfgAdmin)"
+    }
 }
 
 # ── 5. STARTUP_CHANNEL_ID (optional) ──
@@ -296,14 +322,38 @@ if (-not $cfgStartup) {
     Write-Host ''
     $cfgStartup = Read-SecureInput 'Startup Channel ID (or Enter to skip)'
     if ($cfgStartup) {
-        [Environment]::SetEnvironmentVariable('STARTUP_CHANNEL_ID', $cfgStartup, 'Process')
-        $script:EnvChanged = $true
-        Write-Ok 'STARTUP_CHANNEL_ID set'
+        if ($cfgStartup -notmatch '^\d{17,20}$') {
+            Write-Warn "'$cfgStartup' is not a valid Discord Channel ID (must be 17-20 digits)."
+            Write-Warn '  Right-click a text channel in Discord > Copy Channel ID'
+            Write-Host ''
+            $retry = Read-Host "  $([char]0x25B8) Enter numeric Channel ID (or Enter to skip)"
+            if ($retry -and $retry -match '^\d{17,20}$') {
+                $cfgStartup = $retry
+            } elseif ($retry) {
+                Write-Warn "'$retry' is still not a valid snowflake ID. Skipping."
+                $cfgStartup = $null
+            } else {
+                $cfgStartup = $null
+            }
+        }
+        if ($cfgStartup) {
+            [Environment]::SetEnvironmentVariable('STARTUP_CHANNEL_ID', $cfgStartup, 'Process')
+            $script:EnvChanged = $true
+            Write-Ok 'STARTUP_CHANNEL_ID set'
+        } else {
+            Write-Info 'STARTUP_CHANNEL_ID skipped'
+        }
     } else {
         Write-Info 'STARTUP_CHANNEL_ID skipped'
     }
 } else {
-    Write-Ok "STARTUP_CHANNEL_ID found ($cfgStartup)"
+    if ($cfgStartup -notmatch '^\d{17,20}$') {
+        Write-Warn "STARTUP_CHANNEL_ID '$cfgStartup' is not a valid snowflake (must be 17-20 digits). Ignoring."
+        [Environment]::SetEnvironmentVariable('STARTUP_CHANNEL_ID', $null, 'Process')
+        $cfgStartup = $null
+    } else {
+        Write-Ok "STARTUP_CHANNEL_ID found ($cfgStartup)"
+    }
 }
 
 # ── Offer to save .env ──
