@@ -1,6 +1,6 @@
 # Project Guidelines — Discord Autopilot
 
-An autonomous AI coding agent controlled via Discord DMs and @mentions, powered by the GitHub Copilot SDK. Users send messages directly; the agent edits files, runs tests, creates commits, and streams progress back in the same channel. `git push` always requires human approval via Discord buttons. A small set of admin-only slash commands (`/stop`, `/reset`, `/model`, `/config`, `/grant`, `/revoke`, `/update`, `/usage`) provide operational control.
+An autonomous AI coding agent controlled via Discord, powered by the GitHub Copilot SDK. Users submit `/task` commands or DM the admin user; the agent edits files, runs tests, creates commits, and streams progress back in Discord threads. `git push` always requires human approval via Discord buttons. A full set of slash commands (`/task`, `/status`, `/stop`, `/reset`, `/model`, `/config`, `/grant`, `/revoke`, `/update`, `/pause`, `/resume`, `/responders`, `/queue`, `/history`, `/diff`, `/branch`, `/help`, `/stats`) provide control — admin commands require ManageGuild permission.
 
 ## Tech Stack
 

@@ -94,6 +94,10 @@ const DEFAULT_MODEL = process.env.DEFAULT_MODEL || "claude-opus-4.6";
 const MAX_QUEUE_SIZE = safeInt(process.env.MAX_QUEUE_SIZE, 50);
 const MAX_PROMPT_LENGTH = safeInt(process.env.MAX_PROMPT_LENGTH, 4000);
 
+// ── Crash Recovery ───────────────────────────────────────────────────────
+// When true, tasks aborted by a crash/restart are automatically re-enqueued.
+const AUTO_RETRY_ON_CRASH = (process.env.AUTO_RETRY_ON_CRASH || "false").toLowerCase() === "true";
+
 // ── Usage / Cost Monitoring ──────────────────────────────────────────────
 const COST_PER_REQUEST_EUR = safeFloat(process.env.COST_PER_REQUEST_EUR, 0.04);
 const COST_PER_1K_INPUT_TOKENS_EUR = safeFloat(process.env.COST_PER_1K_INPUT_TOKENS_EUR, 0.01);
@@ -147,4 +151,5 @@ export {
   COST_PER_1K_OUTPUT_TOKENS_EUR,
   USAGE_ALERT_THRESHOLD_EUR,
   USAGE_ALERT_CHANNEL_ID,
+  AUTO_RETRY_ON_CRASH,
 };

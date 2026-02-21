@@ -21,7 +21,7 @@ Send a DM or @mention in Discord — the agent edits files, runs tests, commits,
 ## Highlights
 
 - 🤖 **Autonomous agent** — edits, tests, commits without hand-holding
-- 💬 **Conversational** — just DM the bot or @mention it, no commands to learn
+- 💬 **Conversational** — use `/task` to start, DM for admin, reply in threads for follow-ups
 - 📡 **Live streaming** — output streams into per-task Discord threads
 - 🔒 **Push approval gate** — `git push` & PR actions require human approval via buttons
 - 🔓 **Grant approval gate** — outside-workspace access prompts buttons (approve/deny)
@@ -86,31 +86,42 @@ REPO_URL=https://github.com/user/repo.git
 
 ## How To Use
 
-### DMs (primary interaction)
+### `/task` (primary interaction)
 
-Just send a message to the bot in a DM. No commands needed — every message is a task.
+Use the `/task` slash command in any allowed channel to submit work:
 
 ```
-You:   Refactor the auth module to use JWT
+/task prompt: Refactor the auth module to use JWT
+Bot:   ✅ (creates a thread, streams output)
+```
+
+The bot auto-creates a session and workspace on the first task. Follow up by replying in the thread.
+
+### DMs (admin only)
+
+If `ADMIN_USER_ID` is set, that user can DM the bot directly. Every DM becomes a task.
+
+```
+You:   Fix the failing test in auth.test.js
 Bot:   ✅ (reacts, starts working, streams output)
 ```
 
-The bot auto-creates a session and workspace on the first message. Follow-up messages continue the conversation. Type **stop** to abort the current task.
+Follow-up messages continue the conversation.
 
-### @Mention in channels
+### Thread follow-ups
 
-Mention the bot in any allowed channel to start a task:
+Reply in any bot-owned thread to continue the conversation with additional instructions.
 
-```
-You:   @Autopilot add unit tests for the API endpoints
-Bot:   ✅ (creates a thread, streams output there)
-```
+### All slash commands
 
-Reply in the thread for follow-ups.
+**Primary:**
 
-### Admin commands
+| Command | Description |
+|---------|-------------|
+| `/task prompt` | Submit a coding task |
+| `/status` | Show session status, branch, model, queue, grants |
 
-A small set of admin-only slash commands are available as escape hatches:
+**Admin commands** (Manage Guild permission required):
 
 | Command | Description |
 |---------|-------------|
@@ -121,13 +132,24 @@ A small set of admin-only slash commands are available as escape hatches:
 | `/grant path mode:[ro\|rw] ttl:<min>` | Grant access outside workspace |
 | `/revoke path` | Revoke a path grant |
 | `/update [check\|apply]` | Check for and apply bot updates |
-| `/usage [today\|week\|month\|all]` | View request count, token usage & estimated costs (€) |
+| `/pause` | Pause queue processing |
+| `/resume` | Resume queue processing |
+| `/responders [add\|remove\|list]` | Manage who can answer agent questions |
 
-All admin commands require the `Manage Guild` permission.
+**Utility commands** (available to all):
+
+| Command | Description |
+|---------|-------------|
+| `/queue [list\|clear]` | View or clear pending tasks |
+| `/history [limit]` | Show recent task history |
+| `/diff [stat\|full\|staged]` | Show git diff |
+| `/branch [list\|current\|create\|switch]` | Manage branches |
+| `/help` | List all commands |
+| `/stats` | Bot uptime and task statistics |
 
 ## How It Works
 
-1. **Message** → you DM the bot or @mention it → session manager provisions a git worktree
+1. **`/task`** → session manager provisions a git worktree
 2. **Agent works** — Copilot agent works autonomously; every tool call passes through the policy engine
 3. **Live stream** — output streams into a thread (channels) or directly (DMs); secrets are redacted
 4. **Approval gates** — `git push` triggers a button prompt; outside-workspace access requests show approve/deny buttons
@@ -138,7 +160,7 @@ All admin commands require the `Manage Guild` permission.
 agent.sh / agent.ps1      # Deployment scripts (standalone after build)
 build.mjs                  # Generates standalone scripts → dist/
 src/
-├── bot.mjs               # Discord client, message handler, RBAC, admin commands
+├── bot.mjs               # Discord client, slash commands, RBAC, message handler
 ├── command-info.mjs      # Self-awareness prompt (bot identity & capabilities)
 ├── config.mjs            # ENV parsing, defaults
 ├── state.mjs             # SQLite (WAL), migrations

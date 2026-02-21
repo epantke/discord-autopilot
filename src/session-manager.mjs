@@ -161,10 +161,12 @@ async function _createSession(channelId, channel) {
   let copilotSession;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
+      const botName = channel.client?.user?.username || "Autopilot";
       copilotSession = await createAgentSession({
     channelId,
     workspacePath,
     model,
+    botInfo: { botName, branch },
 
     onPushRequest: async (command) => {
       return createPushApprovalRequest(channel, workspacePath, command);
@@ -603,10 +605,12 @@ export async function changeModel(channelId, channel, newModel) {
   // to avoid bricking ctx.copilotSession if the new one fails
   let newSession;
   try {
+    const botName = channel.client?.user?.username || "Autopilot";
     newSession = await createAgentSession({
       channelId,
       workspacePath: ctx.workspacePath,
       model: newModel,
+      botInfo: { botName, branch: ctx.branch },
 
       onPushRequest: async (command) => {
         return createPushApprovalRequest(channel, ctx.workspacePath, command);

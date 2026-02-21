@@ -316,7 +316,7 @@ const stmtStaleSessions = db.prepare(
 );
 
 const stmtStaleRunningTasks = db.prepare(
-  `SELECT id, channel_id, prompt, started_at FROM task_history WHERE status = 'running'`
+  `SELECT id, channel_id, prompt, started_at, user_id FROM task_history WHERE status = 'running'`
 );
 
 const stmtMarkStaleTasksAborted = db.prepare(
