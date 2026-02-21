@@ -11,7 +11,6 @@ import {
   deleteSession as dbDeleteSession,
   insertTask,
   completeTask,
-  getTaskHistory as dbGetTaskHistory,
   addResponder as dbAddResponder,
   removeResponder as dbRemoveResponder,
   getResponders as dbGetResponders,
@@ -121,7 +120,7 @@ const _pendingCreation = new Map();
  * @param {string} channelId
  * @param {import("discord.js").TextBasedChannel} channel
  */
-export async function getOrCreateSession(channelId, channel) {
+async function getOrCreateSession(channelId, channel) {
   if (sessions.has(channelId)) {
     return sessions.get(channelId);
   }
@@ -341,7 +340,7 @@ export async function enqueueTask(channelId, channel, prompt, outputChannel, use
   const ctx = await getOrCreateSession(channelId, channel);
 
   if (ctx.queue.length >= MAX_QUEUE_SIZE) {
-    throw new Error(`Queue full (${MAX_QUEUE_SIZE} tasks max). Use \`/queue clear\` or wait.`);
+    throw new Error(`Queue full (${MAX_QUEUE_SIZE} tasks max). Try again later.`);
   }
 
   return new Promise((resolve, reject) => {
@@ -534,52 +533,6 @@ export function resumeSession(channelId, channel) {
     processQueue(channelId, channel);
   }
   return { found: true, wasPaused };
-}
-
-// ── Queue Management ────────────────────────────────────────────────────────
-
-export function clearQueue(channelId) {
-  const ctx = sessions.get(channelId);
-  if (!ctx) return { found: false, cleared: 0 };
-  const cleared = ctx.queue.length;
-  for (const item of ctx.queue) {
-    const err = new Error("Queue cleared");
-    err._reportedByOutput = true;
-    item.reject(err);
-  }
-  ctx.queue = [];
-  return { found: true, cleared };
-}
-
-export function getQueueInfo(channelId) {
-  const ctx = sessions.get(channelId);
-  if (!ctx) return null;
-  return {
-    paused: ctx.paused,
-    length: ctx.queue.length,
-    items: ctx.queue.map((q, i) => ({ index: i + 1, prompt: q.prompt.slice(0, 100), userTag: q.userTag })),
-  };
-}
-
-// ── Task History ────────────────────────────────────────────────────────────
-
-export function getTaskHistory(channelId, limit = 10) {
-  return dbGetTaskHistory(channelId, limit);
-}
-
-export function getActiveSessionCount() {
-  return sessions.size;
-}
-
-/**
- * Update the branch for an active session (after /branch create or switch).
- */
-export function updateBranch(channelId, newBranch) {
-  const ctx = sessions.get(channelId);
-  if (!ctx) return false;
-  ctx.branch = newBranch;
-  upsertSession(channelId, PROJECT_NAME, ctx.workspacePath, newBranch, ctx.status, ctx.model);
-  return true;
 }
 
 /**

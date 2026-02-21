@@ -297,19 +297,6 @@ export function getTaskHistory(channelId, limit = 10) {
   return stmtTaskHistory.all(channelId, limit);
 }
 
-const stmtTaskStats = db.prepare(`
-  SELECT
-    COUNT(*) AS total,
-    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
-    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
-    SUM(CASE WHEN status = 'aborted' THEN 1 ELSE 0 END) AS aborted
-  FROM task_history
-`);
-
-export function getTaskStats() {
-  return stmtTaskStats.get();
-}
-
 // ── Stale state recovery ────────────────────────────────────────────────────
 const stmtStaleSessions = db.prepare(
   `SELECT channel_id, project_name, branch FROM sessions WHERE status = 'working'`
@@ -357,71 +344,7 @@ export function pruneOldTasks() {
   return stmtPruneOldTasks.run().changes;
 }
 
-// ── Usage Log ───────────────────────────────────────────────────────────────
-const stmtInsertUsage = db.prepare(`
-  INSERT INTO usage_log (channel_id, task_id, prompt_tokens, completion_tokens, requests, model, cost_eur)
-  VALUES (?, ?, ?, ?, ?, ?, ?)
-`);
-
-const stmtUsageSince = db.prepare(`
-  SELECT COALESCE(SUM(requests), 0) AS requests,
-         COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-         COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-         COALESCE(SUM(cost_eur), 0) AS cost_eur
-  FROM usage_log WHERE created_at >= datetime('now', ?)
-`);
-
-const stmtUsageTotal = db.prepare(`
-  SELECT COALESCE(SUM(requests), 0) AS requests,
-         COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-         COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-         COALESCE(SUM(cost_eur), 0) AS cost_eur
-  FROM usage_log
-`);
-
-const stmtUsageByChannel = db.prepare(`
-  SELECT channel_id,
-         COALESCE(SUM(requests), 0) AS requests,
-         COALESCE(SUM(cost_eur), 0) AS cost_eur
-  FROM usage_log WHERE created_at >= datetime('now', ?)
-  GROUP BY channel_id ORDER BY cost_eur DESC LIMIT 10
-`);
-
-const stmtUsageByChannelTotal = db.prepare(`
-  SELECT channel_id,
-         COALESCE(SUM(requests), 0) AS requests,
-         COALESCE(SUM(cost_eur), 0) AS cost_eur
-  FROM usage_log
-  GROUP BY channel_id ORDER BY cost_eur DESC LIMIT 10
-`);
-
-const stmtPruneOldUsage = db.prepare(
-  `DELETE FROM usage_log WHERE created_at < datetime('now', '-90 days')`
-);
-
-export function insertUsage(channelId, taskId, promptTokens, completionTokens, requests, model, costEur) {
-  stmtInsertUsage.run(channelId, taskId, promptTokens, completionTokens, requests, model, costEur);
-}
-
-export function getUsageSince(modifier) {
-  return stmtUsageSince.get(modifier);
-}
-
-export function getUsageTotal() {
-  return stmtUsageTotal.get();
-}
-
-export function getUsageByChannel(modifier) {
-  return stmtUsageByChannel.all(modifier);
-}
-
-export function getUsageByChannelTotal() {
-  return stmtUsageByChannelTotal.all();
-}
-
-export function pruneOldUsage() {
-  return stmtPruneOldUsage.run().changes;
-}
+// ── Usage Log (table exists from migration v3, kept for schema compat) ──────
 
 let dbClosed = false;
 

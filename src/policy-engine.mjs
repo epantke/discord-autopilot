@@ -22,7 +22,7 @@ function safePath(p) {
 /**
  * Check if targetPath is inside workspaceRoot (symlink-safe).
  */
-export function isInsideWorkspace(targetPath, workspaceRoot) {
+function isInsideWorkspace(targetPath, workspaceRoot) {
   const resolvedTarget = safePath(targetPath);
   const resolvedRoot = safePath(workspaceRoot);
   // Must start with root + separator, or be exactly root
@@ -82,7 +82,7 @@ function extractSubCommands(command) {
   return result;
 }
 
-export function isGitPushCommand(command) {
+function isGitPushCommand(command) {
   const parts = extractSubCommands(command);
   // Also detect dangerous wrappers like eval/source that can hide push commands
   if (DANGEROUS_WRAPPERS.test(command)) return true;
@@ -102,7 +102,7 @@ export function isGitPushCommand(command) {
  * @param {"ro"|"rw"} requiredMode - Minimum access mode needed
  * @returns {boolean}
  */
-export function isGranted(targetPath, grants, requiredMode = "ro") {
+function isGranted(targetPath, grants, requiredMode = "ro") {
   const resolvedTarget = safePath(targetPath);
   for (const [grantPath, grant] of grants) {
     if (Date.now() > grant.expiry) continue; // expired

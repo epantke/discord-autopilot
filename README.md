@@ -201,11 +201,6 @@ src/
 | `DISCORD_EDIT_THROTTLE_MS` | `1500` | Throttle interval for Discord message edits |
 | `RATE_LIMIT_WINDOW_MS` | `60000` | Rate limit window per user |
 | `RATE_LIMIT_MAX` | `10` | Max messages per window (admins exempt) |
-| `COST_PER_REQUEST_EUR` | `0.04` | Estimated cost per request in € (flat fallback) |
-| `COST_PER_1K_INPUT_TOKENS_EUR` | `0.01` | Cost per 1K input tokens in € (if SDK provides token data) |
-| `COST_PER_1K_OUTPUT_TOKENS_EUR` | `0.06` | Cost per 1K output tokens in € (if SDK provides token data) |
-| `USAGE_ALERT_THRESHOLD_EUR` | `0` (off) | Daily spending threshold for alerts (0 = disabled) |
-| `USAGE_ALERT_CHANNEL_ID` | _(none)_ | Channel for budget alerts (falls back to admin DM) |
 | `BASE_ROOT` | `~/.local/share/discord-agent` | Base directory for all data |
 | `WORKSPACES_ROOT` | `$BASE_ROOT/workspaces` | Worktree directory |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
