@@ -4,12 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Discord Autopilot — Autonomous AI Coding Agent</title>
-  <meta name="description" content="An autonomous AI coding agent in Discord. Use /task to submit work, and it edits files, runs tests, commits, and streams progress live.">
+  <meta name="description" content="An autonomous AI coding agent in Discord. @mention or DM the bot — it edits files, runs tests, commits, and streams progress live.">
   <meta name="theme-color" content="#5865F2">
 
   <!-- Open Graph -->
   <meta property="og:title" content="Discord Autopilot — Autonomous AI Coding Agent">
-  <meta property="og:description" content="An autonomous AI coding agent in Discord. Use /task to submit work — it edits files, runs tests, commits, and streams progress live.">
+  <meta property="og:description" content="An autonomous AI coding agent in Discord. @mention or DM the bot — it edits files, runs tests, commits, and streams progress live.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://epantke.github.io/discord-autopilot/">
 
@@ -54,12 +54,12 @@
     </h1>
 
     <p class="hero-sub">
-      Use <code>/task</code> in Discord or DM the bot — the agent edits files, runs tests, commits,
+      @mention the bot in Discord or send a DM — the agent edits files, runs tests, commits,
       and streams progress live. Push always requires your approval.
     </p>
 
     <div class="hero-demo">
-      <span class="prompt">/task</span>
+      <span class="prompt">@Autopilot</span>
       <span class="typed" id="typed"></span><span class="cursor"></span>
     </div>
 
@@ -99,8 +99,8 @@
       </div>
       <div class="feature-card reveal">
         <span class="feature-icon">💬</span>
-        <h3>DM-first &amp; Slash Commands</h3>
-        <p>Use <code>/task</code> to start work, DM the admin user directly, or reply in threads for follow-ups. 16 commands total.</p>
+        <h3>DM &amp; @mention</h3>
+        <p>@mention the bot in a channel or DM it directly. Reply in threads for follow-ups. 10 admin slash commands for control.</p>
       </div>
       <div class="feature-card reveal">
         <span class="feature-icon">👥</span>
@@ -113,14 +113,14 @@
         <p>Agent can ask clarifying questions via Discord and wait for your answer. 5 minute timeout.</p>
       </div>
       <div class="feature-card reveal">
-        <span class="feature-icon">�</span>
+        <span class="feature-icon">🔓</span>
         <h3>Grant Approval Gate</h3>
         <p>Outside-workspace access triggers approve/deny buttons — no commands needed. Or use <code>/grant</code> from admin commands.</p>
       </div>
       <div class="feature-card reveal">
         <span class="feature-icon">🔑</span>
         <h3>Secret Scanner</h3>
-        <p>Auto-redacts 9 token patterns (GitHub PAT, AWS, Slack, OpenAI, …) before posting to Discord.</p>
+        <p>Auto-redacts 11 token patterns (GitHub PAT, AWS, Slack, OpenAI, …) before posting to Discord.</p>
       </div>
       <div class="feature-card reveal">
         <span class="feature-icon">💾</span>
@@ -151,7 +151,7 @@
     <div class="flow-steps reveal">
       <div class="flow-step">
         <h3>Submit task</h3>
-        <p>Use <code>/task</code> in a channel or DM the bot (admin only). A session and git worktree are auto-provisioned.</p>
+        <p>@mention the bot in a channel or send a DM. A session and git worktree are auto-provisioned.</p>
       </div>
       <div class="flow-step">
         <h3>Agent works</h3>
@@ -172,8 +172,8 @@
   <section class="section" id="commands">
     <div class="reveal">
       <div class="section-label">Interaction</div>
-      <h2 class="section-title">/task + DMs + 16 slash commands</h2>
-      <p class="section-desc">Use <code>/task</code> to submit work, DM for admin access, or reply in threads. Full set of slash commands for control.</p>
+      <h2 class="section-title">@mention + DMs + 10 admin commands</h2>
+      <p class="section-desc">@mention the bot or DM it to submit work. Reply in threads for follow-ups. Admin slash commands for control.</p>
     </div>
 
     <div class="reveal">
@@ -187,8 +187,8 @@
             </tr>
           </thead>
           <tbody>
-            <tr><td><strong><code>/task</code></strong></td><td>Primary way to submit work — use in any allowed channel.</td></tr>
-            <tr><td><strong>DM</strong></td><td>Admin user can DM the bot directly — every message becomes a task.</td></tr>
+            <tr><td><strong><code>@mention</code></strong></td><td>Primary way to submit work — @mention the bot in any allowed channel.</td></tr>
+            <tr><td><strong>DM</strong></td><td>Admin and allowed users can DM the bot directly — every message becomes a task.</td></tr>
             <tr><td><strong>Thread reply</strong></td><td>Reply in an agent thread to continue the conversation with follow-ups.</td></tr>
           </tbody>
         </table>
@@ -209,8 +209,6 @@
             </tr>
           </thead>
           <tbody>
-            <tr><td><code>/task prompt</code></td><td>Submit a coding task</td></tr>
-            <tr><td><code>/status</code></td><td>Show session status, branch, model, queue, grants</td></tr>
             <tr><td><code>/stop</code></td><td>Abort running task (optionally clear queue) †</td></tr>
             <tr><td><code>/reset</code></td><td>Reset the agent session and workspace †</td></tr>
             <tr><td><code>/model [current|list|set]</code></td><td>View or change the AI model †</td></tr>
@@ -221,16 +219,9 @@
             <tr><td><code>/pause</code></td><td>Pause queue processing †</td></tr>
             <tr><td><code>/resume</code></td><td>Resume queue processing †</td></tr>
             <tr><td><code>/responders [add|remove|list]</code></td><td>Manage who can answer agent questions †</td></tr>
-            <tr><td><code>/queue [list|clear]</code></td><td>View or clear pending tasks</td></tr>
-            <tr><td><code>/history [limit]</code></td><td>Show recent task history</td></tr>
-            <tr><td><code>/diff [stat|full|staged]</code></td><td>Show git diff</td></tr>
-            <tr><td><code>/branch [list|current|create|switch]</code></td><td>Manage branches</td></tr>
-            <tr><td><code>/help</code></td><td>List all commands</td></tr>
-            <tr><td><code>/stats</code></td><td>Bot uptime and task statistics</td></tr>
           </tbody>
         </table>
         <p style="color: var(--text-muted); font-size: 0.8rem; margin-top: 8px;">† Requires Manage Guild permission</p>
-        </table>
       </div>
     </div>
   </section>
@@ -351,6 +342,8 @@ REPO_URL=https://github.com/user/repo.git</pre>
               <tr><td><code>DISCORD_EDIT_THROTTLE_MS</code></td><td>1500</td><td>Discord message edit throttle interval</td></tr>
               <tr><td><code>RATE_LIMIT_WINDOW_MS</code></td><td>60000</td><td>Rate limit window per user</td></tr>
               <tr><td><code>RATE_LIMIT_MAX</code></td><td>10</td><td>Max messages per window (admins exempt)</td></tr>
+              <tr><td><code>AUTO_APPROVE_PUSH</code></td><td>false</td><td>Auto-approve <code>git push</code> without Discord confirmation</td></tr>
+              <tr><td><code>AUTO_RETRY_ON_CRASH</code></td><td>false</td><td>Re-enqueue tasks aborted by a crash/restart</td></tr>
             </tbody>
           </table>
         </div>
@@ -422,7 +415,7 @@ REPO_URL=https://github.com/user/repo.git</pre>
         <span class="security-check">✓</span>
         <div>
           <h4>Secret scanner</h4>
-          <p>Redacts 9 token patterns before any output reaches Discord</p>
+          <p>Redacts 11 token patterns before any output reaches Discord</p>
         </div>
       </div>
       <div class="security-item reveal">

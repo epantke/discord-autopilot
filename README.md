@@ -21,7 +21,7 @@ Send a DM or @mention in Discord — the agent edits files, runs tests, commits,
 ## Highlights
 
 - 🤖 **Autonomous agent** — edits, tests, commits without hand-holding
-- 💬 **Conversational** — use `/task` to start, DM for admin, reply in threads for follow-ups
+- 💬 **Conversational** — @mention or DM the bot, reply in threads for follow-ups
 - 📡 **Live streaming** — output streams into per-task Discord threads
 - 🔒 **Push approval gate** — `git push` & PR actions require human approval via buttons
 - 🔓 **Grant approval gate** — outside-workspace access prompts buttons (approve/deny)
@@ -86,20 +86,20 @@ REPO_URL=https://github.com/user/repo.git
 
 ## How To Use
 
-### `/task` (primary interaction)
+### @mention (primary interaction)
 
-Use the `/task` slash command in any allowed channel to submit work:
+@mention the bot in any allowed channel to submit work:
 
 ```
-/task prompt: Refactor the auth module to use JWT
+@Autopilot Refactor the auth module to use JWT
 Bot:   ✅ (creates a thread, streams output)
 ```
 
 The bot auto-creates a session and workspace on the first task. Follow up by replying in the thread.
 
-### DMs (admin only)
+### DMs
 
-If `ADMIN_USER_ID` is set, that user can DM the bot directly. Every DM becomes a task.
+If `ADMIN_USER_ID` or `ALLOWED_DM_USERS` is set, those users can DM the bot directly. Every DM becomes a task.
 
 ```
 You:   Fix the failing test in auth.test.js
@@ -112,16 +112,7 @@ Follow-up messages continue the conversation.
 
 Reply in any bot-owned thread to continue the conversation with additional instructions.
 
-### All slash commands
-
-**Primary:**
-
-| Command | Description |
-|---------|-------------|
-| `/task prompt` | Submit a coding task |
-| `/status` | Show session status, branch, model, queue, grants |
-
-**Admin commands** (Manage Guild permission required):
+### Slash commands (Manage Guild permission required)
 
 | Command | Description |
 |---------|-------------|
@@ -136,20 +127,9 @@ Reply in any bot-owned thread to continue the conversation with additional instr
 | `/resume` | Resume queue processing |
 | `/responders [add\|remove\|list]` | Manage who can answer agent questions |
 
-**Utility commands** (available to all):
-
-| Command | Description |
-|---------|-------------|
-| `/queue [list\|clear]` | View or clear pending tasks |
-| `/history [limit]` | Show recent task history |
-| `/diff [stat\|full\|staged]` | Show git diff |
-| `/branch [list\|current\|create\|switch]` | Manage branches |
-| `/help` | List all commands |
-| `/stats` | Bot uptime and task statistics |
-
 ## How It Works
 
-1. **`/task`** → session manager provisions a git worktree
+1. **@mention or DM** → session manager provisions a git worktree
 2. **Agent works** — Copilot agent works autonomously; every tool call passes through the policy engine
 3. **Live stream** — output streams into a thread (channels) or directly (DMs); secrets are redacted
 4. **Approval gates** — `git push` triggers a button prompt; outside-workspace access requests show approve/deny buttons
@@ -170,7 +150,7 @@ src/
 ├── session-manager.mjs   # Session lifecycle, task queue, worktrees
 ├── discord-output.mjs    # Streaming, throttling, chunking
 ├── push-approval.mjs     # Push gate, diff summary, buttons
-├── secret-scanner.mjs    # Token redaction (9 patterns)
+├── secret-scanner.mjs    # Token redaction (11 patterns)
 ├── updater.mjs           # Self-update checker & applier
 └── logger.mjs            # Structured JSON logging
 ```
@@ -201,6 +181,8 @@ src/
 | `DISCORD_EDIT_THROTTLE_MS` | `1500` | Throttle interval for Discord message edits |
 | `RATE_LIMIT_WINDOW_MS` | `60000` | Rate limit window per user |
 | `RATE_LIMIT_MAX` | `10` | Max messages per window (admins exempt) |
+| `AUTO_APPROVE_PUSH` | `false` | Auto-approve `git push` without Discord confirmation |
+| `AUTO_RETRY_ON_CRASH` | `false` | Re-enqueue tasks aborted by a crash/restart |
 | `BASE_ROOT` | `~/.local/share/discord-agent` | Base directory for all data |
 | `WORKSPACES_ROOT` | `$BASE_ROOT/workspaces` | Worktree directory |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
@@ -214,7 +196,7 @@ The agent enforces **deny-by-default** security:
 - All file/shell access outside the workspace is blocked
 - `git push` requires Discord button approval (RBAC-protected, 10 min timeout)
 - Outside-workspace access shows approve/deny buttons with read-only or read/write options
-- Secrets are auto-redacted before posting to Discord (9 token patterns + ENV values)
+- Secrets are auto-redacted before posting to Discord (11 token patterns + ENV values)
 - Symlink-safe path resolution (`realpathSync`) before all boundary checks
 - Compound command scanning: `&&`, `||`, `;`, pipes, `sh -c`, `eval`, backticks, `$()`
 - Git push detection covers flags between `git` and `push`, env-variable prefixes

@@ -1,6 +1,6 @@
 # Project Guidelines — Discord Autopilot
 
-An autonomous AI coding agent controlled via Discord, powered by the GitHub Copilot SDK. Users submit `/task` commands or DM the admin user; the agent edits files, runs tests, creates commits, and streams progress back in Discord threads. `git push` always requires human approval via Discord buttons. A full set of slash commands (`/task`, `/status`, `/stop`, `/reset`, `/model`, `/config`, `/grant`, `/revoke`, `/update`, `/pause`, `/resume`, `/responders`, `/queue`, `/history`, `/diff`, `/branch`, `/help`, `/stats`) provide control — admin commands require ManageGuild permission.
+An autonomous AI coding agent controlled via Discord, powered by the GitHub Copilot SDK. Users @mention the bot or DM it; the agent edits files, runs tests, creates commits, and streams progress back in Discord threads. `git push` always requires human approval via Discord buttons. A set of admin slash commands (`/stop`, `/reset`, `/model`, `/config`, `/grant`, `/revoke`, `/update`, `/pause`, `/resume`, `/responders`) provide control — all require ManageGuild permission.
 
 ## Tech Stack
 
@@ -31,7 +31,7 @@ An autonomous AI coding agent controlled via Discord, powered by the GitHub Copi
 | `state.mjs` | SQLite persistence, schema migrations (v0→v2), prepared statements |
 | `discord-output.mjs` | Streaming output, throttled message edits, chunking, attachment fallback |
 | `push-approval.mjs` | Push gate with embed + buttons, approve/reject, 10 min timeout, RBAC |
-| `secret-scanner.mjs` | Token redaction (9 regex patterns + ENV value detection) |
+| `secret-scanner.mjs` | Token redaction (11 regex patterns + ENV value detection) |
 | `command-info.mjs` | Slash command definitions and self-awareness prompt fragment |
 | `updater.mjs` | GitHub release checker, auto-update notification |
 | `logger.mjs` | Structured JSON logging to stdout/stderr |
