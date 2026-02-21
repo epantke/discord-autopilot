@@ -262,11 +262,25 @@ if (-not $cfgAdmin) {
     Write-Host ' (optional)' -ForegroundColor DarkGray
     Write-Host ''
     Write-Host '  Your Discord User ID — the bot will DM you on startup/shutdown.' -ForegroundColor Gray
-    Write-Host '  How to find it: ' -ForegroundColor DarkGray -NoNewline
-    Write-Host 'Settings > Advanced > Developer Mode ON' -ForegroundColor Cyan
-    Write-Host '  Then right-click your name ' -ForegroundColor DarkGray -NoNewline
+    Write-Host '  How to find it:' -ForegroundColor Gray
+    Write-Host '    1. Open Discord ' -ForegroundColor DarkGray -NoNewline
     Write-Host ([char]0x2192) -ForegroundColor DarkGray -NoNewline
-    Write-Host ' Copy User ID' -ForegroundColor White
+    Write-Host ' User Settings (gear icon at bottom left)' -ForegroundColor White
+    Write-Host '    2. Go to ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'App Settings > Advanced' -ForegroundColor White -NoNewline
+    Write-Host ' ' -NoNewline
+    Write-Host ([char]0x2192) -ForegroundColor DarkGray -NoNewline
+    Write-Host ' enable ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'Developer Mode' -ForegroundColor Yellow
+    Write-Host '    3. Go to ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'My Account' -ForegroundColor White -NoNewline
+    Write-Host ' ' -NoNewline
+    Write-Host ([char]0x2192) -ForegroundColor DarkGray -NoNewline
+    Write-Host ' click the ' -ForegroundColor DarkGray -NoNewline
+    Write-Host '...' -ForegroundColor White -NoNewline
+    Write-Host ' (three dots) next to your username' -ForegroundColor DarkGray
+    Write-Host '    4. Click ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'Copy User ID' -ForegroundColor White
     Write-Host '  Press ' -ForegroundColor DarkGray -NoNewline
     Write-Host 'Enter' -ForegroundColor Yellow -NoNewline
     Write-Host ' to skip.' -ForegroundColor DarkGray
@@ -275,9 +289,9 @@ if (-not $cfgAdmin) {
     if ($cfgAdmin) {
         if ($cfgAdmin -notmatch '^\d{17,20}$') {
             Write-Warn "'$cfgAdmin' is not a valid Discord User ID (must be 17-20 digits)."
-            Write-Warn '  That looks like a username. Discord IDs are numeric snowflakes.'
-            Write-Warn '  How to copy it: right-click your name in Discord > Copy User ID'
-            Write-Warn '  (requires Developer Mode: Settings > Advanced > Developer Mode ON)'
+            Write-Warn '  That looks like a username. Discord IDs are long numbers like 123456789012345678.'
+            Write-Warn '  To find yours: Settings (gear icon) > App Settings > Advanced > Developer Mode ON'
+            Write-Warn '  Then: Settings > My Account > click ... next to your username > Copy User ID'
             Write-Host ''
             $retry = Read-Host "  $([char]0x25B8) Enter numeric User ID (or Enter to skip)"
             if ($retry -and $retry -match '^\d{17,20}$') {
