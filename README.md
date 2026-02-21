@@ -2,7 +2,7 @@
 
 # Discord × Copilot — Discord Autopilot
 
-**Delegate coding tasks to an autonomous AI agent — right from Discord.**
+**Chat with an autonomous AI coding agent — right from Discord.**
 
 [![CI](https://github.com/epantke/discord-autopilot/actions/workflows/ci.yml/badge.svg)](https://github.com/epantke/discord-autopilot/actions/workflows/ci.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/epantke/discord-autopilot?logo=github)](https://github.com/epantke/discord-autopilot/releases/latest)
@@ -14,22 +14,25 @@
 
 ---
 
-Drop a `/task` in Discord and the agent edits files, runs tests, commits — and streams progress live into a thread. `git push` always requires your approval first.
+Send a DM or @mention in Discord — the agent edits files, runs tests, commits, and streams progress live. `git push` always requires your approval first. No slash commands needed.
 
 > **📖 [Full documentation & interactive guide →](https://epantke.github.io/discord-autopilot/)**
 
 ## Highlights
 
 - 🤖 **Autonomous agent** — edits, tests, commits without hand-holding
+- 💬 **Conversational** — just DM the bot or @mention it, no commands to learn
 - 📡 **Live streaming** — output streams into per-task Discord threads
 - 🔒 **Push approval gate** — `git push` & PR actions require human approval via buttons
-- 🧵 **Thread & DM follow-ups** — reply in an agent thread or DM to send follow-up tasks
-- 📁 **Task queue** — queue multiple tasks, pause/resume/clear at will
+- 🔓 **Grant approval gate** — outside-workspace access prompts buttons (approve/deny)
+- 🧵 **Thread follow-ups** — reply in a thread to continue the conversation
+- 👥 **Multi-user** — each user gets their own isolated workspace and session
 - ❓ **Ask-user** — agent can ask clarifying questions via Discord and wait for your answer
 - 🛡️ **Deny-by-default** — all access outside workspace blocked unless explicitly granted
 - 🔑 **Secret scanner** — auto-redacts tokens & keys before posting to Discord
 - 💾 **Session recovery** — sessions, grants & history survive bot restarts (SQLite)
-- 🏗️ **Workspace isolation** — each Discord channel / DM gets its own git worktree
+- 🏗️ **Workspace isolation** — every DM / channel gets its own git worktree
+- 🧠 **Self-aware** — the bot knows its capabilities and can explain them when asked
 
 ## ⚠️ Security Notice & Disclaimer
 
@@ -77,37 +80,56 @@ REPO_URL=https://github.com/user/repo.git
 
 1. [Discord Developer Portal](https://discord.com/developers/applications) → New Application → Bot → copy token
 2. Enable **Message Content Intent** under Bot settings
-3. Bot Permissions: `Send Messages`, `Embed Links`, `Attach Files`, `Use Slash Commands`, `Create Public Threads`, `Send Messages in Threads`
+3. Bot Permissions: `Send Messages`, `Embed Links`, `Attach Files`, `Read Message History`, `Use Slash Commands`, `Create Public Threads`, `Send Messages in Threads`
 4. OAuth2 → URL Generator → scopes: `bot`, `applications.commands` → invite
 5. Set `DISCORD_TOKEN` and run `./agent.sh` or `.\agent.ps1`
 
-## Commands
+## How To Use
+
+### DMs (primary interaction)
+
+Just send a message to the bot in a DM. No commands needed — every message is a task.
+
+```
+You:   Refactor the auth module to use JWT
+Bot:   ✅ (reacts, starts working, streams output)
+```
+
+The bot auto-creates a session and workspace on the first message. Follow-up messages continue the conversation. Type **stop** to abort the current task.
+
+### @Mention in channels
+
+Mention the bot in any allowed channel to start a task:
+
+```
+You:   @Autopilot add unit tests for the API endpoints
+Bot:   ✅ (creates a thread, streams output there)
+```
+
+Reply in the thread for follow-ups.
+
+### Admin commands
+
+A small set of admin-only slash commands are available as escape hatches:
 
 | Command | Description |
 |---------|-------------|
-| `/task prompt:<text>` | Send a coding task to the agent |
 | `/stop` | Abort running task (optionally clear queue) |
-| `/pause` / `/resume` | Pause / resume queue processing |
-| `/queue [list\|clear]` | View or clear pending tasks |
-| `/history [limit]` | Show recent task history |
-| `/status` | Session status, queue & active grants |
-| `/diff [stat\|full\|staged]` | Show git diff in workspace |
-| `/branch [list\|current\|create\|switch]` | Manage agent branches |
+| `/reset` | Reset the agent session and workspace |
 | `/model [current\|list\|set]` | View or change the AI model |
+| `/config` | View current bot configuration |
 | `/grant path mode:[ro\|rw] ttl:<min>` | Grant access outside workspace |
 | `/revoke path` | Revoke a path grant |
-| `/approve_push` | Approve a pending git push |
-| `/config` | View current bot configuration |
-| `/reset` | Reset the agent session |
-| `/help` | List all available commands |
-| `/stats` | Show uptime, task counts, active sessions |
+| `/update [check\|apply]` | Check for and apply bot updates |
+
+All admin commands require the `Manage Guild` permission.
 
 ## How It Works
 
-1. **`/task`** → bot creates a thread (or replies in DM) → session manager provisions a git worktree
+1. **Message** → you DM the bot or @mention it → session manager provisions a git worktree
 2. **Agent works** — Copilot agent works autonomously; every tool call passes through the policy engine
-3. **Live stream** — output streams into the thread/DM; secrets are redacted before posting
-4. **Push gate** — `git push` triggers an approval gate with buttons; you review and decide
+3. **Live stream** — output streams into a thread (channels) or directly (DMs); secrets are redacted
+4. **Approval gates** — `git push` triggers a button prompt; outside-workspace access requests show approve/deny buttons
 
 ## Architecture
 
@@ -115,16 +137,18 @@ REPO_URL=https://github.com/user/repo.git
 agent.sh / agent.ps1      # Deployment scripts (standalone after build)
 build.mjs                  # Generates standalone scripts → dist/
 src/
-├── bot.mjs               # Discord client, slash commands, RBAC
+├── bot.mjs               # Discord client, message handler, RBAC, admin commands
+├── command-info.mjs      # Self-awareness prompt (bot identity & capabilities)
 ├── config.mjs            # ENV parsing, defaults
 ├── state.mjs             # SQLite (WAL), migrations
 ├── policy-engine.mjs     # Path security, push detection
 ├── grants.mjs            # Grant CRUD, TTL, auto-revoke
-├── copilot-client.mjs    # SDK session factory
+├── copilot-client.mjs    # Copilot SDK session factory
 ├── session-manager.mjs   # Session lifecycle, task queue, worktrees
 ├── discord-output.mjs    # Streaming, throttling, chunking
 ├── push-approval.mjs     # Push gate, diff summary, buttons
 ├── secret-scanner.mjs    # Token redaction (9 patterns)
+├── updater.mjs           # Self-update checker & applier
 └── logger.mjs            # Structured JSON logging
 ```
 
@@ -136,6 +160,8 @@ src/
 | `REPO_URL` | _(prompted)_ | Repository to clone |
 | `GITHUB_TOKEN` | _(none)_ | Fine-grained PAT — permissions: Contents (r/w), Pull requests (r/w) |
 | `DEFAULT_MODEL` | `claude-opus-4.6` | AI model ID (e.g. `claude-sonnet-4.6`, `gpt-4o`) |
+| `ADMIN_USER_ID` | _(none)_ | Your Discord user ID — always allowed in DMs |
+| `ALLOWED_DM_USERS` | _(none)_ | Comma-separated user IDs allowed to DM the bot |
 | `ALLOWED_GUILDS` | _(all)_ | Comma-separated guild IDs |
 | `ALLOWED_CHANNELS` | _(all)_ | Comma-separated channel IDs |
 | `ADMIN_ROLE_IDS` | _(all)_ | Comma-separated admin role IDs |
@@ -146,13 +172,12 @@ src/
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `STARTUP_CHANNEL_ID` | _(none)_ | Channel for online/offline/reconnect notifications |
-| `ADMIN_USER_ID` | _(none)_ | User ID for admin DMs on startup/shutdown |
 | `MAX_QUEUE_SIZE` | `50` | Maximum number of queued tasks per session |
 | `MAX_PROMPT_LENGTH` | `4000` | Maximum prompt length in characters |
 | `TASK_TIMEOUT_MS` | `1800000` | Task timeout (default: 30 min) |
 | `DISCORD_EDIT_THROTTLE_MS` | `1500` | Throttle interval for Discord message edits |
 | `RATE_LIMIT_WINDOW_MS` | `60000` | Rate limit window per user |
-| `RATE_LIMIT_MAX` | `10` | Max commands per window (admins exempt) |
+| `RATE_LIMIT_MAX` | `10` | Max messages per window (admins exempt) |
 | `BASE_ROOT` | `~/.local/share/discord-agent` | Base directory for all data |
 | `WORKSPACES_ROOT` | `$BASE_ROOT/workspaces` | Worktree directory |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
@@ -165,18 +190,19 @@ The agent enforces **deny-by-default** security:
 
 - All file/shell access outside the workspace is blocked
 - `git push` requires Discord button approval (RBAC-protected, 10 min timeout)
+- Outside-workspace access shows approve/deny buttons with read-only or read/write options
 - Secrets are auto-redacted before posting to Discord (9 token patterns + ENV values)
 - Symlink-safe path resolution (`realpathSync`) before all boundary checks
 - Compound command scanning: `&&`, `||`, `;`, pipes, `sh -c`, `eval`, backticks, `$()`
 - Git push detection covers flags between `git` and `push`, env-variable prefixes
-- DM access restricted to `ADMIN_USER_ID` only
+- DM access restricted to `ADMIN_USER_ID` and `ALLOWED_DM_USERS` only
 - Tilde expansion (`cd ~`) blocked in shell commands
 - Grant TTL with auto-revoke — no permanent grants
 - All SQL uses prepared statements (no string interpolation)
 - `DISCORD_TOKEN` and PATs removed from `process.env` before Copilot subprocess
 - Branch name sanitization: `/^[\w.\/-]{1,100}$/`
 - Snowflake validation: Discord IDs checked as 17-20 digit strings
-- Per-user rate limiting on commands and follow-ups
+- Per-user rate limiting on messages and follow-ups
 
 See the [full security breakdown](https://epantke.github.io/discord-autopilot/#security) for details.
 

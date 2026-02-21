@@ -13,7 +13,6 @@ import {
   Routes,
   SlashCommandBuilder,
   EmbedBuilder,
-  AttachmentBuilder,
 } from "discord.js";
 
 import {
@@ -22,6 +21,7 @@ import {
   ALLOWED_GUILDS,
   ALLOWED_CHANNELS,
   ADMIN_ROLE_IDS,
+  ALLOWED_DM_USERS,
   PROJECT_NAME,
   DISCORD_EDIT_THROTTLE_MS,
   DEFAULT_GRANT_MODE,
@@ -44,27 +44,17 @@ import {
   getSessionStatus,
   resetSession,
   hardStop,
-  pauseSession,
-  resumeSession,
-  clearQueue,
-  getQueueInfo,
-  getTaskHistory,
-  getActiveSessionCount,
   isAwaitingQuestion,
-  addChannelResponder,
-  removeChannelResponder,
-  getChannelResponders,
-  updateBranch,
   changeModel,
   listAvailableModels,
   cleanupOrphanedWorktrees,
+  setBotName,
 } from "./session-manager.mjs";
 
 import { addGrant, revokeGrant, startGrantCleanup, restoreGrants } from "./grants.mjs";
 import {
   closeDb,
   getAllSessions,
-  getTaskStats,
   getStaleSessions,
   getStaleRunningTasks,
   markStaleTasksAborted,
@@ -74,27 +64,51 @@ import { stopCopilotClient } from "./copilot-client.mjs";
 import { redactSecrets } from "./secret-scanner.mjs";
 import { checkForUpdate, downloadAndApplyUpdate, restartBot } from "./updater.mjs";
 import { createLogger } from "./logger.mjs";
-import { execSync, execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
-
-const execFileAsync = promisify(execFile);
 
 const log = createLogger("bot");
 
-// ── Slash Commands Definition ───────────────────────────────────────────────
+// ── Slash Commands Definition (admin escape-hatch only) ─────────────────────
+// Primary interaction is via DMs and @mentions — these are fallback admin tools.
 
 const commands = [
   new SlashCommandBuilder()
-    .setName("task")
-    .setDescription("Send a task to the coding agent")
+    .setName("stop")
+    .setDescription("Hard stop — abort the running task immediately")
+    .addBooleanOption((opt) =>
+      opt
+        .setName("clear_queue")
+        .setDescription("Also clear all pending tasks (default: true)")
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
+    .setName("reset")
+    .setDescription("Reset the agent session for this channel")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
+    .setName("model")
+    .setDescription("View or change the AI model for this channel")
     .addStringOption((opt) =>
-      opt.setName("prompt").setDescription("Task description").setRequired(true)
+      opt
+        .setName("action")
+        .setDescription("What to do")
+        .addChoices(
+          { name: "Show current model", value: "current" },
+          { name: "List available models", value: "list" },
+          { name: "Set model", value: "set" }
+        )
+    )
+    .addStringOption((opt) =>
+      opt.setName("name").setDescription("Model ID to switch to (for set)").setAutocomplete(true)
     ),
 
   new SlashCommandBuilder()
-    .setName("status")
-    .setDescription("Show current agent session status"),
+    .setName("config")
+    .setDescription("View current bot configuration")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("grant")
@@ -129,100 +143,6 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
-    .setName("reset")
-    .setDescription("Reset the agent session for this channel")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-
-  new SlashCommandBuilder()
-    .setName("stop")
-    .setDescription("Hard stop — abort the running task immediately")
-    .addBooleanOption((opt) =>
-      opt
-        .setName("clear_queue")
-        .setDescription("Also clear all pending tasks (default: true)")
-    )
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-
-  new SlashCommandBuilder()
-    .setName("pause")
-    .setDescription("Pause queue processing (current task finishes, no new ones start)")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-
-  new SlashCommandBuilder()
-    .setName("resume")
-    .setDescription("Resume queue processing after a pause")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-
-  new SlashCommandBuilder()
-    .setName("queue")
-    .setDescription("View or manage the task queue")
-    .addStringOption((opt) =>
-      opt
-        .setName("action")
-        .setDescription("What to do")
-        .addChoices(
-          { name: "List pending tasks", value: "list" },
-          { name: "Clear all pending tasks", value: "clear" }
-        )
-    ),
-
-  new SlashCommandBuilder()
-    .setName("history")
-    .setDescription("Show recent task history")
-    .addIntegerOption((opt) =>
-      opt
-        .setName("limit")
-        .setDescription("Number of tasks to show (default: 10)")
-        .setMinValue(1)
-        .setMaxValue(50)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("config")
-    .setDescription("View current bot configuration")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-
-  new SlashCommandBuilder()
-    .setName("diff")
-    .setDescription("Show git diff for the agent workspace")
-    .addStringOption((opt) =>
-      opt
-        .setName("mode")
-        .setDescription("Diff mode")
-        .addChoices(
-          { name: "Summary (stat)", value: "stat" },
-          { name: "Full diff", value: "full" },
-          { name: "Staged only", value: "staged" }
-        )
-    ),
-
-  new SlashCommandBuilder()
-    .setName("branch")
-    .setDescription("Manage agent branches")
-    .addStringOption((opt) =>
-      opt
-        .setName("action")
-        .setDescription("What to do")
-        .addChoices(
-          { name: "List branches", value: "list" },
-          { name: "Show current branch", value: "current" },
-          { name: "Create new branch", value: "create" },
-          { name: "Switch branch", value: "switch" }
-        )
-    )
-    .addStringOption((opt) =>
-      opt.setName("name").setDescription("Branch name (for create/switch)").setAutocomplete(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("help")
-    .setDescription("Show all available bot commands"),
-
-  new SlashCommandBuilder()
-    .setName("stats")
-    .setDescription("Show bot statistics and uptime"),
-
-  new SlashCommandBuilder()
     .setName("update")
     .setDescription("Check for and apply bot updates")
     .addStringOption((opt) =>
@@ -235,42 +155,6 @@ const commands = [
         )
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-
-  new SlashCommandBuilder()
-    .setName("responders")
-    .setDescription("Manage who can answer agent questions")
-    .addStringOption((opt) =>
-      opt
-        .setName("action")
-        .setDescription("What to do")
-        .setRequired(true)
-        .addChoices(
-          { name: "Add user", value: "add" },
-          { name: "Remove user", value: "remove" },
-          { name: "List responders", value: "list" }
-        )
-    )
-    .addUserOption((opt) =>
-      opt.setName("user").setDescription("User to add/remove")
-    )
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
-
-  new SlashCommandBuilder()
-    .setName("model")
-    .setDescription("View or change the AI model for this channel")
-    .addStringOption((opt) =>
-      opt
-        .setName("action")
-        .setDescription("What to do")
-        .addChoices(
-          { name: "Show current model", value: "current" },
-          { name: "List available models", value: "list" },
-          { name: "Set model", value: "set" }
-        )
-    )
-    .addStringOption((opt) =>
-      opt.setName("name").setDescription("Model ID to switch to (for set)").setAutocomplete(true)
-    ),
 ];
 
 // ── Access Control ──────────────────────────────────────────────────────────
@@ -278,9 +162,11 @@ const commands = [
 function isAllowed(interaction) {
   const isDM = !interaction.guildId;
 
-  // DMs: only allow if ADMIN_USER_ID is set and matches the sender
+  // DMs: allow admin and explicitly allowed DM users
   if (isDM) {
-    return ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID;
+    if (ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID) return true;
+    if (ALLOWED_DM_USERS && ALLOWED_DM_USERS.has(interaction.user.id)) return true;
+    return false;
   }
 
   if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(interaction.guildId)) return false;
@@ -298,6 +184,13 @@ function isAdmin(interaction) {
   }
   if (!ADMIN_ROLE_IDS) return true;
   return hasAnyRole(interaction.member, ADMIN_ROLE_IDS);
+}
+
+/** Check if a message author is allowed to interact via DMs or @mentions. */
+function isAllowedMessage(userId) {
+  if (ADMIN_USER_ID && userId === ADMIN_USER_ID) return true;
+  if (ALLOWED_DM_USERS && ALLOWED_DM_USERS.has(userId)) return true;
+  return false;
 }
 
 /**
@@ -407,8 +300,13 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildPresences,
   ],
   partials: [Partials.Channel],
+  presence: {
+    activities: [{ name: `v${CURRENT_VERSION} · DM me!`, type: ActivityType.Watching }],
+    status: "online",
+  },
 });
 
 client.once(Events.ClientReady, async () => {
@@ -419,6 +317,9 @@ client.once(Events.ClientReady, async () => {
     log.error("Failed to register slash commands — bot continues but commands may not appear", { error: err.message });
   }
   startGrantCleanup();
+
+  // Set bot name for self-awareness prompt
+  setBotName(client.user.displayName || client.user.username);
 
   // Restore grants from DB for any persisted sessions
   for (const row of getAllSessions()) {
@@ -444,7 +345,7 @@ client.once(Events.ClientReady, async () => {
 
   // ── Bot Presence ────────────────────────────────────────────────────────
   client.user.setPresence({
-    activities: [{ name: `v${CURRENT_VERSION} · /task`, type: ActivityType.Watching }],
+    activities: [{ name: `v${CURRENT_VERSION} · DM me!`, type: ActivityType.Watching }],
     status: "online",
   });
 
@@ -632,7 +533,7 @@ async function recoverFromPreviousErrors() {
         const embed = new EmbedBuilder()
           .setTitle("\u26A0\uFE0F Bot Restarted — Task Aborted")
           .setColor(0xffa500)
-          .setDescription(`The bot was restarted and your running task was interrupted.\n\n**Aborted task:** ${snippet}\n\nYou can re-submit the task with \`/task\`.`)
+          .setDescription(`The bot was restarted and your running task was interrupted.\n\n**Aborted task:** ${snippet}\n\nYou can re-submit the task by sending a message.`)
           .setTimestamp();
         await ch.send({ embeds: [embed] });
       }
@@ -798,20 +699,6 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    if (interaction.commandName !== "branch") return;
-    const channelId = interaction.channelId;
-    const status = getSessionStatus(channelId);
-    if (!status) return interaction.respond([]).catch(() => {});
-    try {
-      const { stdout } = await execFileAsync("git", ["branch", "--list", "--format=%(refname:short)"], {
-        cwd: status.workspace, encoding: "utf-8", timeout: 5_000,
-      });
-      const branches = stdout.trim().split("\n").filter(Boolean);
-      const filtered = branches.filter((b) => b.toLowerCase().includes(focused.toLowerCase())).slice(0, 25);
-      await interaction.respond(filtered.map((b) => ({ name: b, value: b })));
-    } catch {
-      await interaction.respond([]).catch(() => {});
-    }
     return;
   }
 
@@ -843,90 +730,6 @@ client.on("interactionCreate", async (interaction) => {
 
   try {
     switch (commandName) {
-      // ── /task ─────────────────────────────────────────────────────────
-      case "task": {
-        const prompt = interaction.options.getString("prompt");
-        // Show queue position if there are other tasks ahead
-        const queueInfo = getQueueInfo(channelId);
-        const pos = queueInfo?.length || 0;
-        const posHint = pos > 0 ? ` *(queue position: ${pos + 1})*` : "";
-        await interaction.reply(`📋 **Task queued:** ${prompt}${posHint}`);
-
-        // Create a thread for this task's output — fall back to channel on failure
-        let outputChannel = channel;
-        try {
-          const reply = await interaction.fetchReply();
-          const thread = await reply.startThread({
-            name: `Task: ${prompt.slice(0, 90)}`,
-            autoArchiveDuration: 1440,
-          });
-          outputChannel = thread;
-        } catch (err) {
-          log.warn("Failed to create thread, using channel", { error: err.message });
-        }
-
-        // Fire and forget — streaming output handled by session manager.
-        // processQueue already reports task errors via output.finish(),
-        // so only show pre-queue errors (queue full, prompt too long, session creation failure).
-        enqueueTask(channelId, channel, prompt, outputChannel, { id: interaction.user.id, tag: interaction.user.tag }).catch((err) => {
-          if (err._reportedByOutput) return;
-          outputChannel
-            .send(`❌ **Task failed:** ${redactSecrets(err.message).clean}`)
-            .catch(() => {});
-        });
-        break;
-      }
-
-      // ── /status ───────────────────────────────────────────────────────
-      case "status": {
-        const status = getSessionStatus(channelId);
-        if (!status) {
-          await interaction.reply({
-            content: "No active session for this channel. Use `/task` to start one.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        const grantLines = status.grants.length
-          ? status.grants
-              .map((g) => `\`${g.path}\` (${g.mode}, ${g.expiresIn}min left)`)
-              .join("\n")
-          : "None";
-
-        const fields = [
-          { name: "Status", value: status.paused ? `${status.status} (⏸ paused)` : status.status, inline: true },
-          { name: "Branch", value: status.branch, inline: true },
-          { name: "Model", value: status.model || "*(default)*", inline: true },
-          { name: "Queue", value: `${status.queueLength} pending`, inline: true },
-        ];
-        if (status.currentPrompt) {
-          const snippet = status.currentPrompt.length > 100 ? status.currentPrompt.slice(0, 100) + "…" : status.currentPrompt;
-          fields.push({ name: "Current Task", value: snippet, inline: false });
-        }
-        fields.push(
-          { name: "Workspace", value: `\`${status.workspace}\``, inline: false },
-          { name: "Active Grants", value: grantLines, inline: false }
-        );
-
-        const embed = new EmbedBuilder()
-          .setTitle("📊 Agent Status")
-          .setColor(
-            status.paused
-              ? 0xff6600
-              : status.status === "working"
-                ? 0x3498db
-                : status.status === "idle"
-                  ? 0x2ecc71
-                  : 0xff9900
-          )
-          .addFields(...fields)
-          .setTimestamp();
-
-        await interaction.reply({ embeds: [embed] });
-        break;
-      }
-
       // ── /grant ────────────────────────────────────────────────────────
       case "grant": {
         const grantPath = interaction.options.getString("path");
@@ -980,7 +783,7 @@ client.on("interactionCreate", async (interaction) => {
       case "reset": {
         await interaction.deferReply();
         await resetSession(channelId);
-        await interaction.editReply("🔄 Session reset. Use `/task` to start a new one.");
+        await interaction.editReply("🔄 Session reset. Send a message to start a new one.");
         break;
       }
 
@@ -1000,140 +803,6 @@ client.on("interactionCreate", async (interaction) => {
         else parts.push("No task was running");
         if (result.queueCleared > 0) parts.push(`cleared ${result.queueCleared} queued task(s)`);
         await interaction.reply(`🛑 **Stopped.** ${parts.join(", ")}.`);
-        break;
-      }
-
-      // ── /pause ────────────────────────────────────────────────────────
-      case "pause": {
-        const result = pauseSession(channelId);
-        if (!result.found) {
-          await interaction.reply({
-            content: "No active session to pause.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-        if (result.wasAlreadyPaused) {
-          await interaction.reply({
-            content: "Session is already paused.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-        await interaction.reply(
-          "⏸ **Queue paused.** Current task (if any) will finish, but no new tasks will start.\n" +
-            "Use `/resume` to continue or `/stop` to abort the running task."
-        );
-        break;
-      }
-
-      // ── /resume ───────────────────────────────────────────────────────
-      case "resume": {
-        const result = resumeSession(channelId, channel);
-        if (!result.found) {
-          await interaction.reply({
-            content: "No active session to resume.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-        if (!result.wasPaused) {
-          await interaction.reply({
-            content: "Session was not paused.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-        await interaction.reply("▶️ **Queue resumed.** Pending tasks will now be processed.");
-        break;
-      }
-
-      // ── /queue ────────────────────────────────────────────────────────
-      case "queue": {
-        const action = interaction.options.getString("action") || "list";
-
-        if (action === "clear") {
-          const result = clearQueue(channelId);
-          if (!result.found) {
-            await interaction.reply({
-              content: "No active session.",
-              flags: MessageFlags.Ephemeral,
-            });
-            break;
-          }
-          await interaction.reply(
-            result.cleared > 0
-              ? `🗑 Cleared **${result.cleared}** pending task(s).`
-              : "Queue was already empty."
-          );
-          break;
-        }
-
-        // action === "list"
-        const info = getQueueInfo(channelId);
-        if (!info) {
-          await interaction.reply({
-            content: "No active session. Use `/task` to start one.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        if (info.length === 0) {
-          await interaction.reply({
-            content: `Queue is empty.${info.paused ? " *(paused)*" : ""}`,
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        const lines = info.items.map(
-          (item) => `**${item.index}.** ${item.prompt}${item.prompt.length >= 100 ? "…" : ""}${item.userTag ? ` *(${item.userTag})*` : ""}`
-        );
-        let description = lines.join("\n");
-        if (description.length > 4000) {
-          description = description.slice(0, 4000) + "\n…(truncated)";
-        }
-        const embed = new EmbedBuilder()
-          .setTitle(`📋 Task Queue (${info.length} pending)`)
-          .setColor(info.paused ? 0xff6600 : 0x3498db)
-          .setDescription(description)
-          .setFooter({ text: info.paused ? "⏸ Queue is paused" : "Queue is active" });
-        await interaction.reply({ embeds: [embed] });
-        break;
-      }
-
-      // ── /history ──────────────────────────────────────────────────────
-      case "history": {
-        const limit = interaction.options.getInteger("limit") || 10;
-        const tasks = getTaskHistory(channelId, limit);
-
-        if (tasks.length === 0) {
-          await interaction.reply({
-            content: "No task history for this channel.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        const statusIcon = { completed: "✅", failed: "❌", running: "⏳", aborted: "🛑" };
-        const lines = tasks.map((t) => {
-          const icon = statusIcon[t.status] || "❔";
-          const prompt = t.prompt.length > 60 ? t.prompt.slice(0, 60) + "…" : t.prompt;
-          const time = t.started_at ? `<t:${Math.floor(new Date(t.started_at + "Z").getTime() / 1000)}:R>` : "";
-          return `${icon} ${prompt} ${time}`;
-        });
-
-        let historyDesc = lines.join("\n");
-        if (historyDesc.length > 4000) {
-          historyDesc = historyDesc.slice(0, 4000) + "\n…(truncated)";
-        }
-        const embed = new EmbedBuilder()
-          .setTitle(`📜 Task History (last ${tasks.length})`)
-          .setColor(0x9b59b6)
-          .setDescription(historyDesc)
-          .setTimestamp();
-        await interaction.reply({ embeds: [embed] });
         break;
       }
 
@@ -1171,236 +840,6 @@ client.on("interactionCreate", async (interaction) => {
           )
           .setTimestamp();
         await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
-        break;
-      }
-
-      // ── /diff ─────────────────────────────────────────────────────────
-      case "diff": {
-        const status = getSessionStatus(channelId);
-        if (!status) {
-          await interaction.reply({
-            content: "No active session. Use `/task` first.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        const mode = interaction.options.getString("mode") || "stat";
-        const gitArgs =
-          mode === "stat"
-            ? ["diff", "--stat"]
-            : mode === "staged"
-              ? ["diff", "--cached"]
-              : ["diff"];
-
-        await interaction.deferReply();
-
-        try {
-          const { stdout } = await execFileAsync("git", gitArgs, {
-            cwd: status.workspace,
-            encoding: "utf-8",
-            timeout: 15_000,
-          });
-
-          if (!stdout.trim()) {
-            await interaction.editReply("No changes.");
-            break;
-          }
-
-          const clean = redactSecrets(stdout).clean;
-
-          if (clean.length <= 1900) {
-            await interaction.editReply(`\`\`\`diff\n${clean}\n\`\`\``);
-          } else {
-            const attachment = new AttachmentBuilder(Buffer.from(clean, "utf-8"), {
-              name: "diff.txt",
-              description: `git diff (${mode})`,
-            });
-            await interaction.editReply({ files: [attachment] });
-          }
-        } catch (err) {
-          await interaction.editReply(`❌ \`git ${gitArgs.join(" ")}\` failed: ${redactSecrets(err.message).clean}`);
-        }
-        break;
-      }
-
-      // ── /branch ───────────────────────────────────────────────────────
-      case "branch": {
-        const status = getSessionStatus(channelId);
-        if (!status) {
-          await interaction.reply({
-            content: "No active session. Use `/task` first.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        const action = interaction.options.getString("action") || "current";
-        const branchName = interaction.options.getString("name");
-
-        if (action === "current") {
-          await interaction.reply(`Current branch: \`${status.branch}\``);
-          break;
-        }
-
-        if (action === "list") {
-          try {
-            const { stdout } = await execFileAsync("git", ["branch", "--list"], {
-              cwd: status.workspace,
-              encoding: "utf-8",
-              timeout: 5_000,
-            });
-            await interaction.reply(`\`\`\`\n${redactSecrets(stdout.trim()).clean}\n\`\`\``);
-          } catch (err) {
-            await interaction.reply(`❌ Failed: ${redactSecrets(err.message).clean}`);
-          }
-          break;
-        }
-
-        if (!branchName) {
-          await interaction.reply({
-            content: `Please provide a branch name for \`${action}\`.`,
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        // Sanitize branch name: only allow safe characters
-        if (!/^[\w.\/-]{1,100}$/.test(branchName)) {
-          await interaction.reply({
-            content: "\u26A0\uFE0F Invalid branch name. Only letters, digits, `.`, `/`, `-`, `_` are allowed (max 100 chars).",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        // Guard: no branch operations while working
-        if (status.status === "working") {
-          await interaction.reply({
-            content: "⚠️ Cannot switch/create branches while a task is running. Use `/stop` first.",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        await interaction.deferReply();
-
-        if (action === "create") {
-          try {
-            await execFileAsync("git", ["checkout", "-b", branchName], {
-              cwd: status.workspace,
-              encoding: "utf-8",
-              timeout: 10_000,
-            });
-            updateBranch(channelId, branchName);
-            await interaction.editReply(`✅ Created and switched to branch \`${branchName}\`.`);
-          } catch (err) {
-            await interaction.editReply(`❌ Failed: ${redactSecrets(err.message).clean}`);
-          }
-          break;
-        }
-
-        if (action === "switch") {
-          try {
-            await execFileAsync("git", ["checkout", branchName], {
-              cwd: status.workspace,
-              encoding: "utf-8",
-              timeout: 10_000,
-            });
-            updateBranch(channelId, branchName);
-            await interaction.editReply(`✅ Switched to branch \`${branchName}\`.`);
-          } catch (err) {
-            await interaction.editReply(`❌ Failed: ${redactSecrets(err.message).clean}`);
-          }
-          break;
-        }
-        break;
-      }
-
-      // ── /help ─────────────────────────────────────────────────────────
-      case "help": {
-        const embed = new EmbedBuilder()
-          .setTitle("📖 Bot Commands")
-          .setColor(0x3498db)
-          .setDescription(
-            commands
-              .filter((c) => c.name !== "help")
-              .map((c) => `**/${c.name}** — ${c.description}`)
-              .join("\n")
-          )
-          .setFooter({ text: `${commands.length} commands available · v${CURRENT_VERSION}` })
-          .setTimestamp();
-        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
-        break;
-      }
-
-      // ── /stats ────────────────────────────────────────────────────────
-      case "stats": {
-        const stats = getTaskStats();
-        const uptime = process.uptime();
-        const days = Math.floor(uptime / 86400);
-        const hours = Math.floor((uptime % 86400) / 3600);
-        const mins = Math.floor((uptime % 3600) / 60);
-        const uptimeStr = days > 0
-          ? `${days}d ${hours}h ${mins}m`
-          : hours > 0
-            ? `${hours}h ${mins}m`
-            : `${mins}m`;
-
-        const embed = new EmbedBuilder()
-          .setTitle("📈 Bot Statistics")
-          .setColor(0x2ecc71)
-          .addFields(
-            { name: "Version", value: `v${CURRENT_VERSION}`, inline: true },
-            { name: "Uptime", value: uptimeStr, inline: true },
-            { name: "Active Sessions", value: String(getActiveSessionCount()), inline: true },
-            { name: "Tasks Total", value: String(stats.total), inline: true },
-            { name: "✅ Completed", value: String(stats.completed), inline: true },
-            { name: "❌ Failed", value: String(stats.failed), inline: true },
-            { name: "🛑 Aborted", value: String(stats.aborted), inline: true },
-          )
-          .setTimestamp();
-        await interaction.reply({ embeds: [embed] });
-        break;
-      }
-
-      // ── /responders ─────────────────────────────────────────────────
-      case "responders": {
-        const action = interaction.options.getString("action");
-        const user = interaction.options.getUser("user");
-
-        if (action === "list") {
-          const responders = getChannelResponders(channelId);
-          if (responders.size === 0) {
-            await interaction.reply({
-              content: "No responders configured — only admins can answer agent questions.",
-              flags: MessageFlags.Ephemeral,
-            });
-          } else {
-            const list = [...responders].map((id) => `<@${id}>`).join(", ");
-            await interaction.reply({
-              content: `**Responders:** ${list}`,
-              flags: MessageFlags.Ephemeral,
-            });
-          }
-          break;
-        }
-
-        if (!user) {
-          await interaction.reply({
-            content: "⚠️ Please provide a user (`user` option).",
-            flags: MessageFlags.Ephemeral,
-          });
-          break;
-        }
-
-        if (action === "add") {
-          addChannelResponder(channelId, user.id);
-          await interaction.reply(`✅ <@${user.id}> can now answer agent questions in this channel.`);
-        } else if (action === "remove") {
-          removeChannelResponder(channelId, user.id);
-          await interaction.reply(`🔒 <@${user.id}> removed as responder.`);
-        }
         break;
       }
 
@@ -1646,55 +1085,97 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// ── Follow-up in Threads & DMs ──────────────────────────────────────────────
-
-// Known command names for detecting slash-command-like messages typed as plain text
-const KNOWN_COMMANDS = new Set(commands.map((c) => c.name));
+// ── Message-based Interaction (DMs, @mentions, thread follow-ups) ────────────
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  // Detect plain-text messages that look like slash commands (e.g. "/model", "/status")
-  const slashMatch = message.content.trim().match(/^\/([\w-]+)/);
-  if (slashMatch && KNOWN_COMMANDS.has(slashMatch[1])) {
-    message.reply(`💡 **\`/${slashMatch[1]}\`** is a slash command — type it in the message bar and pick it from the popup, or use it in a server channel (not as plain text).`).catch(() => {});
-    return;
-  }
-
   const isDM = !message.guild;
+  const prompt = message.content.trim();
+  if (!prompt) return;
 
-  // ── DM follow-ups: only allow if ADMIN_USER_ID matches the sender
+  // ── DMs: primary interaction channel ──────────────────────────────────
   if (isDM) {
-    if (!ADMIN_USER_ID || message.author.id !== ADMIN_USER_ID) return;
+    if (!isAllowedMessage(message.author.id)) return;
+
     const dmChannelId = message.channel.id;
-    const status = getSessionStatus(dmChannelId);
-    if (!status) return; // No active session in this DM — ignore
+
+    // Safety catch: "stop" keyword → hard stop
+    if (/^stop$/i.test(prompt)) {
+      const result = await hardStop(dmChannelId, true);
+      if (result.found) {
+        message.reply("🛑 **Stopped.** Task aborted and queue cleared.").catch(() => {});
+      } else {
+        message.reply("No active session to stop.").catch(() => {});
+      }
+      return;
+    }
 
     // If the agent is waiting for a question answer, don't enqueue as follow-up
     if (isAwaitingQuestion(dmChannelId)) return;
 
-    const prompt = message.content.trim();
-    if (!prompt) return;
-
-    // Rate-limit DM follow-ups (reuse interaction rate-limiter)
+    // Rate-limit DM messages
     if (isDmRateLimited(message.author.id) > 0) {
       message.react("⏳").catch(() => {});
       return;
     }
 
-    log.info("Follow-up in DM", { channelId: dmChannelId, prompt: prompt.slice(0, 100) });
+    log.info("DM message", { userId: message.author.id, channelId: dmChannelId, prompt: prompt.slice(0, 100) });
     message.react("✅").catch(() => {});
 
+    // Auto-session: enqueueTask creates the session if none exists
     enqueueTask(dmChannelId, message.channel, prompt, message.channel, { id: message.author.id, tag: message.author.tag }).catch((err) => {
       if (err._reportedByOutput) return;
       message.channel
-        .send(`❌ **Follow-up failed:** ${redactSecrets(err.message).clean}`)
+        .send(`❌ **Failed:** ${redactSecrets(err.message).clean}`)
         .catch(() => {});
     });
     return;
   }
 
-  // ── Thread follow-ups (guild channels)
+  // ── @Mention in guild channels: create a thread and start a task ──────
+  if (message.mentions.has(client.user, { ignoreRoles: true, ignoreRepliedUser: true, ignoreEveryone: true })) {
+    // Access control: guild/channel/role filters
+    if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(message.guildId)) return;
+    if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(message.channelId)) return;
+    if (ADMIN_ROLE_IDS && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
+
+    // Strip the mention from the prompt
+    const mentionPrompt = prompt.replace(new RegExp(`<@!?${client.user.id}>`, "g"), "").trim();
+    if (!mentionPrompt) return;
+
+    // Rate limit
+    if (isDmRateLimited(message.author.id) > 0) {
+      message.react("⏳").catch(() => {});
+      return;
+    }
+
+    log.info("@Mention task", { channelId: message.channelId, userId: message.author.id, prompt: mentionPrompt.slice(0, 100) });
+    message.react("✅").catch(() => {});
+
+    // Create a thread for this task's output
+    let outputChannel = message.channel;
+    try {
+      const thread = await message.startThread({
+        name: `Task: ${mentionPrompt.slice(0, 90)}`,
+        autoArchiveDuration: 1440,
+      });
+      outputChannel = thread;
+    } catch (err) {
+      log.warn("Failed to create thread, using channel", { error: err.message });
+    }
+
+    const channelId = message.channelId;
+    enqueueTask(channelId, message.channel, mentionPrompt, outputChannel, { id: message.author.id, tag: message.author.tag }).catch((err) => {
+      if (err._reportedByOutput) return;
+      outputChannel
+        .send(`❌ **Task failed:** ${redactSecrets(err.message).clean}`)
+        .catch(() => {});
+    });
+    return;
+  }
+
+  // ── Thread follow-ups (guild channels) ────────────────────────────────
   if (!message.channel.isThread()) return;
 
   const parent = message.channel.parent;
@@ -1711,9 +1192,6 @@ client.on("messageCreate", async (message) => {
   if (ADMIN_ROLE_IDS) {
     if (!hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
   }
-
-  const prompt = message.content.trim();
-  if (!prompt) return;
 
   // Rate-limit thread follow-ups
   if (isDmRateLimited(message.author.id) > 0) {

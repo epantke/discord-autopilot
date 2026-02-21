@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, DEFAULT_MODEL } from "./config.mjs";
+import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, ALLOWED_DM_USERS, DEFAULT_MODEL, DEFAULT_GRANT_TTL_MIN } from "./config.mjs";
 import {
   upsertSession,
   getSession,
@@ -12,15 +12,13 @@ import {
   deleteSession as dbDeleteSession,
   insertTask,
   completeTask,
-  getTaskHistory as dbGetTaskHistory,
-  addResponder as dbAddResponder,
-  removeResponder as dbRemoveResponder,
   getResponders as dbGetResponders,
   deleteRespondersByChannel,
   pruneOldTasks,
 } from "./state.mjs";
 import { createAgentSession, listAvailableModels } from "./copilot-client.mjs";
 import {
+  addGrant,
   getActiveGrants,
   restoreGrants,
   revokeAllGrants,
@@ -28,10 +26,21 @@ import {
 import { DiscordOutput } from "./discord-output.mjs";
 import { createPushApprovalRequest } from "./push-approval.mjs";
 import { redactSecrets } from "./secret-scanner.mjs";
+import {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  MessageFlags,
+} from "discord.js";
 import { createLogger } from "./logger.mjs";
 
 const execFileAsync = promisify(execFile);
 const log = createLogger("session");
+
+/** Bot display name — set by bot.mjs once the client is ready. */
+let _botName = "Autopilot";
+export function setBotName(name) { _botName = name; }
 
 /**
  * In-memory session context per channel.
@@ -56,7 +65,6 @@ const responderStore = new Map();
  * @property {DiscordOutput|null} output
  * @property {number|null} taskId
  * @property {string|null} model
- * @property {boolean} paused
  * @property {boolean} _aborted
  */
 
@@ -122,7 +130,7 @@ const _pendingCreation = new Map();
  * @param {string} channelId
  * @param {import("discord.js").TextBasedChannel} channel
  */
-export async function getOrCreateSession(channelId, channel) {
+async function getOrCreateSession(channelId, channel) {
   if (sessions.has(channelId)) {
     return sessions.get(channelId);
   }
@@ -147,18 +155,100 @@ export async function getOrCreateSession(channelId, channel) {
 function buildSessionCallbacks(channelId, channel, workspacePath) {
   return {
     onPushRequest: async (command) => {
-      return createPushApprovalRequest(channel, workspacePath, command);
+      const ctx = sessions.get(channelId);
+      if (ctx) ctx._currentPhase = "⏳ Waiting for push approval…";
+      try {
+        return await createPushApprovalRequest(channel, workspacePath, command);
+      } finally {
+        const c = sessions.get(channelId);
+        if (c) c._currentPhase = "🧠 Thinking…";
+      }
     },
 
-    onOutsideRequest: (reason) => {
+    onOutsideRequest: async (reason) => {
       const ctx = sessions.get(channelId);
+      if (ctx) ctx._currentPhase = "⏳ Waiting for access approval…";
       const target = ctx?.output?.channel || channel;
-      target
-        .send(
-          `⛔ **Access Denied**\n${reason}\n\n` +
-            `Use \`/grant path:<absolute-path> mode:ro ttl:30\` to allow access.`
+
+      // Extract the path from the reason string (e.g. "Path /foo/bar is outside workspace")
+      const pathMatch = reason.match(/(?:Path |path )([^\s]+)/i);
+      const requestedPath = pathMatch?.[1] || null;
+
+      if (!requestedPath) {
+        target.send(`⛔ **Access Denied**\n${reason}`).catch(() => {});
+        return;
+      }
+
+      const ttl = DEFAULT_GRANT_TTL_MIN;
+      const embed = new EmbedBuilder()
+        .setTitle("🔓 Access Request")
+        .setColor(0xff9900)
+        .setDescription(
+          `The agent needs access to a path outside the workspace:\n\n` +
+          `\`${requestedPath}\`\n\n` +
+          `**Reason:** ${reason}`
         )
-        .catch(() => {});
+        .addFields(
+          { name: "Mode", value: "Read-only", inline: true },
+          { name: "Duration", value: `${ttl} min`, inline: true },
+        )
+        .setTimestamp();
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("grant_approve_ro")
+          .setLabel(`✅ Allow read-only (${ttl} min)`)
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId("grant_approve_rw")
+          .setLabel(`✅ Allow read/write (${ttl} min)`)
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("grant_reject")
+          .setLabel("❌ Deny")
+          .setStyle(ButtonStyle.Danger),
+      );
+
+      let msg;
+      try {
+        msg = await target.send({ embeds: [embed], components: [row] });
+      } catch {
+        return;
+      }
+
+      try {
+        const btn = await msg.awaitMessageComponent({
+          filter: (i) => {
+            if (!i.customId.startsWith("grant_")) return false;
+            const isAdminUser = ADMIN_USER_ID && i.user.id === ADMIN_USER_ID;
+            const isDmUser = ALLOWED_DM_USERS && ALLOWED_DM_USERS.has(i.user.id);
+            if (isAdminUser || isDmUser) return true;
+            if (ADMIN_ROLE_IDS && i.member?.roles?.cache) {
+              if ([...ADMIN_ROLE_IDS].some((id) => i.member.roles.cache.has(id))) return true;
+            }
+            i.reply({ content: "⛔ You don't have permission to approve access.", flags: MessageFlags.Ephemeral }).catch(() => {});
+            return false;
+          },
+          time: 300_000,
+        });
+
+        if (btn.customId === "grant_reject") {
+          const denied = EmbedBuilder.from(embed).setColor(0xcc0000).setFooter({ text: `Denied by ${btn.user.tag}` });
+          await btn.update({ embeds: [denied], components: [] }).catch(() => {});
+          return;
+        }
+
+        const mode = btn.customId === "grant_approve_rw" ? "rw" : "ro";
+        addGrant(channelId, requestedPath, mode, ttl);
+        const approved = EmbedBuilder.from(embed).setColor(0x00cc00).setFooter({ text: `${mode} access granted by ${btn.user.tag}` });
+        await btn.update({ embeds: [approved], components: [] }).catch(() => {});
+        log.info("Grant approved via button", { channelId, path: requestedPath, mode, user: btn.user.tag });
+      } catch {
+        msg.edit({ components: [] }).catch(() => {});
+      } finally {
+        const c = sessions.get(channelId);
+        if (c) c._currentPhase = "🧠 Thinking…";
+      }
     },
 
     onDelta: (text) => {
@@ -169,6 +259,7 @@ function buildSessionCallbacks(channelId, channel, workspacePath) {
     onToolStart: (toolName) => {
       const ctx = sessions.get(channelId);
       if (!ctx) return;
+      ctx._currentPhase = `🔧 \`${toolName}\`…`;
       const count = ctx._toolsCompleted || 0;
       const suffix = count > 0 ? `  · ${count} done` : "";
       ctx.output?.status(`🔧 \`${toolName}\`…${suffix}`);
@@ -178,6 +269,7 @@ function buildSessionCallbacks(channelId, channel, workspacePath) {
       const ctx = sessions.get(channelId);
       if (!ctx) return;
       ctx._toolsCompleted = (ctx._toolsCompleted || 0) + 1;
+      ctx._currentPhase = "🧠 Thinking…";
       if (!success && error) {
         ctx.output?.append(`\n❌ \`${toolName}\`: ${error}\n`);
       }
@@ -197,7 +289,10 @@ function buildSessionCallbacks(channelId, channel, workspacePath) {
 
     onUserQuestion: async (question, choices) => {
       const ctx = sessions.get(channelId);
-      if (ctx) ctx.awaitingQuestion = true;
+      if (ctx) {
+        ctx.awaitingQuestion = true;
+        ctx._currentPhase = "❓ Waiting for your answer…";
+      }
 
       const target = ctx?.output?.channel || channel;
       await target.send(
@@ -225,7 +320,10 @@ function buildSessionCallbacks(channelId, channel, workspacePath) {
       } catch {
         return "No answer provided within timeout.";
       } finally {
-        if (ctx) ctx.awaitingQuestion = false;
+        if (ctx) {
+          ctx.awaitingQuestion = false;
+          ctx._currentPhase = "🧠 Thinking…";
+        }
       }
     },
   };
@@ -256,6 +354,7 @@ async function _createSession(channelId, channel) {
         channelId,
         workspacePath,
         model,
+        botInfo: { botName: _botName, branch },
         ...buildSessionCallbacks(channelId, channel, workspacePath),
       });
       break; // success
@@ -285,7 +384,6 @@ async function _createSession(channelId, channel) {
     queue: [],
     output: null,
     taskId: null,
-    paused: false,
     _aborted: false,
     currentPrompt: null,
     awaitingQuestion: false,
@@ -315,18 +413,7 @@ function restoreResponders(channelId) {
   }
 }
 
-export function addChannelResponder(channelId, userId) {
-  if (!responderStore.has(channelId)) responderStore.set(channelId, new Set());
-  responderStore.get(channelId).add(userId);
-  dbAddResponder(channelId, userId);
-}
-
-export function removeChannelResponder(channelId, userId) {
-  responderStore.get(channelId)?.delete(userId);
-  return dbRemoveResponder(channelId, userId);
-}
-
-export function getChannelResponders(channelId) {
+function getChannelResponders(channelId) {
   return responderStore.get(channelId) || new Set();
 }
 
@@ -347,7 +434,7 @@ export async function enqueueTask(channelId, channel, prompt, outputChannel, use
   const ctx = await getOrCreateSession(channelId, channel);
 
   if (ctx.queue.length >= MAX_QUEUE_SIZE) {
-    throw new Error(`Queue full (${MAX_QUEUE_SIZE} tasks max). Use \`/queue clear\` or wait.`);
+    throw new Error(`Queue full (${MAX_QUEUE_SIZE} tasks max). Use \`/stop\` or wait.`);
   }
 
   return new Promise((resolve, reject) => {
@@ -365,7 +452,7 @@ export async function enqueueTask(channelId, channel, prompt, outputChannel, use
 
 async function processQueue(channelId) {
   const ctx = sessions.get(channelId);
-  if (!ctx || ctx.status === "working" || ctx.paused) return;
+  if (!ctx || ctx.status === "working") return;
   if (ctx.queue.length === 0) return;
 
   const { prompt, resolve, reject, outputChannel, userId } = ctx.queue.shift();
@@ -373,15 +460,39 @@ async function processQueue(channelId) {
   ctx.status = "working";
   ctx.currentPrompt = prompt;
   ctx._toolsCompleted = 0;
+  ctx._currentPhase = "🚀 Starting…";
+  ctx._taskStartedAt = Date.now();
   updateSessionStatus(channelId, "working");
   ctx.output = new DiscordOutput(outputChannel);
   ctx.taskId = insertTask(channelId, prompt, userId, TASK_TIMEOUT_MS);
   log.info("Task started", { channelId, taskId: ctx.taskId, prompt: prompt.slice(0, 100) });
 
+  // Send initial visible status immediately so the user sees something
+  ctx.output.status("🚀 Starting task…");
+  try {
+    await ctx.output.flush();
+  } catch (err) {
+    log.error("Initial status flush failed", { channelId, error: err.message, code: err.code });
+    // Bare fallback — verify the channel works at all
+    outputChannel.send("⚙️ Working on your task…").catch(() => {});
+  }
+
   // Typing indicator while agent is working
   outputChannel.sendTyping().catch(() => {});
   const typingInterval = setInterval(() => outputChannel.sendTyping().catch(() => {}), 8_000);
   typingInterval.unref();
+
+  // Heartbeat: update visible status every 5s with elapsed time and phase
+  const heartbeatInterval = setInterval(() => {
+    if (!ctx.output || ctx.output.finished) return;
+    const elapsed = Date.now() - ctx._taskStartedAt;
+    const secs = Math.floor(elapsed / 1000);
+    const timeStr = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
+    const tools = ctx._toolsCompleted || 0;
+    const toolStr = tools > 0 ? `  · ${tools} tool${tools !== 1 ? "s" : ""} done` : "";
+    ctx.output.status(`${ctx._currentPhase}  ⏱ ${timeStr}${toolStr}`);
+  }, 5_000);
+  heartbeatInterval.unref();
 
   try {
     const response = await ctx.copilotSession.sendAndWait({ prompt }, TASK_TIMEOUT_MS);
@@ -412,13 +523,13 @@ async function processQueue(channelId) {
     reject(err);
   } finally {
     clearInterval(typingInterval);
+    clearInterval(heartbeatInterval);
     ctx.output = null;
     ctx.currentPrompt = null;
+    ctx._currentPhase = null;
     ctx._lastActivity = Date.now();
-    // Continue queue unless paused (use setImmediate to avoid stack overflow)
-    if (!ctx.paused) {
-      setImmediate(() => processQueue(channelId));
-    }
+    // Continue queue (use setImmediate to avoid stack overflow)
+    setImmediate(() => processQueue(channelId));
   }
 }
 
@@ -440,7 +551,6 @@ export function getSessionStatus(channelId) {
 
   return {
     status: ctx.status,
-    paused: ctx.paused,
     workspace: ctx.workspacePath,
     branch: ctx.branch,
     model: ctx.model || null,
@@ -520,74 +630,6 @@ export async function hardStop(channelId, clearQueue = true) {
   return { found: true, wasWorking, queueCleared };
 }
 
-// ── Pause / Resume ──────────────────────────────────────────────────────────
-
-export function pauseSession(channelId) {
-  const ctx = sessions.get(channelId);
-  if (!ctx) return { found: false };
-  const wasAlreadyPaused = ctx.paused;
-  ctx.paused = true;
-  return { found: true, wasAlreadyPaused };
-}
-
-export function resumeSession(channelId, channel) {
-  const ctx = sessions.get(channelId);
-  if (!ctx) return { found: false };
-  const wasPaused = ctx.paused;
-  ctx.paused = false;
-  // Kick the queue in case items are waiting
-  if (wasPaused && ctx.queue.length > 0) {
-    processQueue(channelId);
-  }
-  return { found: true, wasPaused };
-}
-
-// ── Queue Management ────────────────────────────────────────────────────────
-
-export function clearQueue(channelId) {
-  const ctx = sessions.get(channelId);
-  if (!ctx) return { found: false, cleared: 0 };
-  const cleared = ctx.queue.length;
-  for (const item of ctx.queue) {
-    const err = new Error("Queue cleared");
-    err._reportedByOutput = true;
-    item.reject(err);
-  }
-  ctx.queue = [];
-  return { found: true, cleared };
-}
-
-export function getQueueInfo(channelId) {
-  const ctx = sessions.get(channelId);
-  if (!ctx) return null;
-  return {
-    paused: ctx.paused,
-    length: ctx.queue.length,
-    items: ctx.queue.map((q, i) => ({ index: i + 1, prompt: q.prompt.slice(0, 100), userTag: q.userTag })),
-  };
-}
-
-// ── Task History ────────────────────────────────────────────────────────────
-
-export function getTaskHistory(channelId, limit = 10) {
-  return dbGetTaskHistory(channelId, limit);
-}
-
-export function getActiveSessionCount() {
-  return sessions.size;
-}
-
-/**
- * Update the branch for an active session (after /branch create or switch).
- */
-export function updateBranch(channelId, newBranch) {
-  const ctx = sessions.get(channelId);
-  if (!ctx) return false;
-  ctx.branch = newBranch;
-  upsertSession(channelId, PROJECT_NAME, ctx.workspacePath, newBranch, ctx.status, ctx.model);
-  return true;
-}
-
 /**
  * Change the model for an active session.
  * Destroys and recreates the Copilot session with the new model.
@@ -614,6 +656,7 @@ export async function changeModel(channelId, channel, newModel) {
       channelId,
       workspacePath: ctx.workspacePath,
       model: newModel,
+      botInfo: { botName: _botName, branch: ctx.branch },
       ...buildSessionCallbacks(channelId, channel, ctx.workspacePath),
     });
   } catch (err) {

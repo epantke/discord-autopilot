@@ -31,10 +31,6 @@ function isNewer(latest, current) {
 
 // ── Check for update ────────────────────────────────────────────────────────
 
-export function getCurrentVersion() {
-  return CURRENT_VERSION;
-}
-
 export async function checkForUpdate({ force = false } = {}) {
   if (!force && _cachedResult && Date.now() - _cachedAt < CACHE_TTL_MS) {
     return _cachedResult;

@@ -207,7 +207,7 @@ export function deleteGrant(channelId, grantPath) {
   stmtDeleteGrant.run(channelId, grantPath);
 }
 
-export function deleteExpiredGrants() {
+function deleteExpiredGrants() {
   return stmtDeleteExpiredGrants.run();
 }
 
@@ -308,22 +308,6 @@ export function markStaleTasksAborted() {
 
 export function resetStaleSessions() {
   return stmtResetStaleSessions.run().changes;
-}
-
-// ── Stats ───────────────────────────────────────────────────────────────────
-
-const stmtTaskStats = db.prepare(`
-  SELECT status, COUNT(*) as count FROM task_history GROUP BY status
-`);
-
-export function getTaskStats() {
-  const rows = stmtTaskStats.all();
-  const stats = { total: 0, completed: 0, failed: 0, aborted: 0, running: 0 };
-  for (const row of rows) {
-    stats[row.status] = row.count;
-    stats.total += row.count;
-  }
-  return stats;
 }
 
 // ── Cleanup ─────────────────────────────────────────────────────────────────

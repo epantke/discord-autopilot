@@ -1,6 +1,9 @@
 import { DISCORD_EDIT_THROTTLE_MS } from "./config.mjs";
 import { AttachmentBuilder } from "discord.js";
 import { redactSecrets } from "./secret-scanner.mjs";
+import { createLogger } from "./logger.mjs";
+
+const log = createLogger("output");
 
 const MESSAGE_SPLIT_THRESHOLD = 1800;
 
@@ -32,7 +35,7 @@ export class DiscordOutput {
    * Append a chunk of text and schedule a throttled edit.
    */
   append(text) {
-    if (this.finished) return;
+    if (this.finished || !text) return;
     this.content += text;
     this._pendingContent += text;
     this.dirty = true;
@@ -67,8 +70,8 @@ export class DiscordOutput {
     }
     try {
       await this.flush();
-    } catch {
-      // Best-effort final flush
+    } catch (err) {
+      log.error("Finish flush failed", { error: err.message, code: err.code });
     }
   }
 
@@ -126,6 +129,7 @@ export class DiscordOutput {
         this._statusFooter = "";
       }
     } catch (err) {
+      log.error("Flush failed", { error: err.message, code: err.code });
       // If edit fails (message deleted etc.), try a new message
       if (err.code === 10008 || err.code === 50005) {
         this.message = null;
@@ -140,8 +144,8 @@ export class DiscordOutput {
             this._cleanedContent = "";
             this._statusFooter = "";
           }
-        } catch {
-          // Give up silently
+        } catch (retryErr) {
+          log.error("Flush retry also failed", { error: retryErr.message, code: retryErr.code });
         }
       }
     } finally {
