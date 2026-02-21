@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Discord × Copilot — Autonomous Remote Coding Agent (Windows PowerShell)
+  Discord Autopilot — Autonomous AI Coding Agent (Windows PowerShell)
 .DESCRIPTION
   Single-script deployment. Run: .\agent.ps1
   Equivalent to agent.sh for Windows environments.
@@ -96,7 +96,7 @@ Write-Host ([char]0x00D7) -ForegroundColor DarkGray -NoNewline
 Write-Host ' C o p i l o t' -ForegroundColor Cyan
 Write-Host ''
 Write-Host ('    ' + ([string][char]0x2550) * 46) -ForegroundColor DarkGray
-Write-Host '    Autonomous Remote Coding Agent' -ForegroundColor DarkGray -NoNewline
+Write-Host '    Discord Autopilot' -ForegroundColor DarkGray -NoNewline
 Write-Host '   v1.0' -ForegroundColor DarkCyan
 Write-Host ('    ' + ([string][char]0x2550) * 46) -ForegroundColor DarkGray
 

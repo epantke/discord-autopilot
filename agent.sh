@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  Discord × Copilot — Autonomous Remote Coding Agent                        ║
+# ║  Discord Autopilot — Autonomous AI Coding Agent                            ║
 # ║  Single-script deployment. Run: ./agent.sh                                 ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
@@ -25,7 +25,7 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
 fi
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║  Discord × Copilot Remote Coding Agent          ║${NC}"
+echo -e "${CYAN}║  Discord Autopilot                              ║${NC}"
 echo -e "${CYAN}╚══════════════════════════════════════════════════╝${NC}"
 echo ""
 

@@ -2,7 +2,7 @@
 description: "Use when working on Discord slash commands, interaction handling, RBAC, rate limiting, Discord output streaming, thread management, embeds, or push-approval UI in this discord.js v14 bot."
 tools: ["read", "edit", "search", "execute"]
 ---
-You are a Discord bot development specialist for a discord.js v14 bot that serves as the user interface for a remote coding agent.
+You are a Discord bot development specialist for a discord.js v14 bot that serves as the user interface for Discord Autopilot.
 
 ## Your Domain
 

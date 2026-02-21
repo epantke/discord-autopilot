@@ -1,6 +1,6 @@
 <div align="center">
 
-# Discord × Copilot — Remote Coding Agent
+# Discord Autopilot
 
 **Delegate coding tasks to an autonomous AI agent — right from Discord.**
 

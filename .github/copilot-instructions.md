@@ -1,4 +1,4 @@
-# Project Guidelines — Discord × Copilot Remote Coding Agent
+# Project Guidelines — Discord Autopilot
 
 An autonomous AI coding agent controlled via Discord slash commands, powered by the GitHub Copilot SDK. Users submit `/task` commands; the agent edits files, runs tests, creates commits, and streams progress to Discord threads. `git push` always requires human approval via Discord buttons.
 
