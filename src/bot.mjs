@@ -26,6 +26,7 @@ import {
   BASE_ROOT,
   WORKSPACES_ROOT,
   REPO_PATH,
+  TASK_TIMEOUT_MS,
   RATE_LIMIT_WINDOW_MS,
   RATE_LIMIT_MAX,
   STARTUP_CHANNEL_ID,
@@ -58,8 +59,11 @@ import {
 import { stopCopilotClient } from "./copilot-client.mjs";
 import { redactSecrets } from "./secret-scanner.mjs";
 import { createLogger } from "./logger.mjs";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync, execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { existsSync } from "node:fs";
+
+const execFileAsync = promisify(execFile);
 
 const log = createLogger("bot");
 
@@ -192,7 +196,7 @@ const commands = [
         )
     )
     .addStringOption((opt) =>
-      opt.setName("name").setDescription("Branch name (for create/switch)")
+      opt.setName("name").setDescription("Branch name (for create/switch)").setAutocomplete(true)
     ),
 
   new SlashCommandBuilder()
@@ -372,8 +376,9 @@ function buildStartupEmbed({ envIssues, recoveryInfo } = {}) {
   const title = hasErrors ? "\u26A0\uFE0F Bot Online — Configuration Errors" : hasRecovery ? "\u{1F7E1} Bot Online — Recovered" : "\u{1F7E2} Bot Online";
 
   const embed = new EmbedBuilder()
+    .setTitle(title)
     .setColor(color)
-    .setDescription(`${title} — **${client.user.tag}** · ${PROJECT_NAME} · ${commands.length} cmds`);
+    .setDescription(`**${client.user.tag}** · ${PROJECT_NAME} · ${commands.length} cmds`);
 
   if (hasErrors) {
     embed.addFields({
@@ -605,6 +610,26 @@ async function sendStartupNotification({ envIssues, recoveryInfo } = {}) {
 // ── Interaction Handler ─────────────────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
+  // Branch name autocomplete
+  if (interaction.isAutocomplete()) {
+    if (interaction.commandName !== "branch") return;
+    const focused = interaction.options.getFocused();
+    const channelId = interaction.channelId;
+    const status = getSessionStatus(channelId);
+    if (!status) return interaction.respond([]).catch(() => {});
+    try {
+      const { stdout } = await execFileAsync("git", ["branch", "--list", "--format=%(refname:short)"], {
+        cwd: status.workspace, encoding: "utf-8", timeout: 5_000,
+      });
+      const branches = stdout.trim().split("\n").filter(Boolean);
+      const filtered = branches.filter((b) => b.toLowerCase().includes(focused.toLowerCase())).slice(0, 25);
+      await interaction.respond(filtered.map((b) => ({ name: b, value: b })));
+    } catch {
+      await interaction.respond([]).catch(() => {});
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand() && !interaction.isButton()) return;
 
   // Button interactions (push approve/reject) handled by collector in push-approval.mjs
@@ -675,6 +700,20 @@ client.on("interactionCreate", async (interaction) => {
               .join("\n")
           : "None";
 
+        const fields = [
+          { name: "Status", value: status.paused ? `${status.status} (⏸ paused)` : status.status, inline: true },
+          { name: "Branch", value: status.branch, inline: true },
+          { name: "Queue", value: `${status.queueLength} pending`, inline: true },
+        ];
+        if (status.currentPrompt) {
+          const snippet = status.currentPrompt.length > 100 ? status.currentPrompt.slice(0, 100) + "…" : status.currentPrompt;
+          fields.push({ name: "Current Task", value: snippet, inline: false });
+        }
+        fields.push(
+          { name: "Workspace", value: `\`${status.workspace}\``, inline: false },
+          { name: "Active Grants", value: grantLines, inline: false }
+        );
+
         const embed = new EmbedBuilder()
           .setTitle("📊 Agent Status")
           .setColor(
@@ -686,13 +725,7 @@ client.on("interactionCreate", async (interaction) => {
                   ? 0x2ecc71
                   : 0xff9900
           )
-          .addFields(
-            { name: "Status", value: status.paused ? `${status.status} (⏸ paused)` : status.status, inline: true },
-            { name: "Branch", value: status.branch, inline: true },
-            { name: "Queue", value: `${status.queueLength} pending`, inline: true },
-            { name: "Workspace", value: `\`${status.workspace}\``, inline: false },
-            { name: "Active Grants", value: grantLines, inline: false }
-          )
+          .addFields(...fields)
           .setTimestamp();
 
         await interaction.reply({ embeds: [embed] });
@@ -843,10 +876,14 @@ client.on("interactionCreate", async (interaction) => {
         const lines = info.items.map(
           (item) => `**${item.index}.** ${item.prompt}${item.prompt.length >= 100 ? "…" : ""}${item.userTag ? ` *(${item.userTag})*` : ""}`
         );
+        let description = lines.join("\n");
+        if (description.length > 4000) {
+          description = description.slice(0, 4000) + "\n…(truncated)";
+        }
         const embed = new EmbedBuilder()
           .setTitle(`📋 Task Queue (${info.length} pending)`)
           .setColor(info.paused ? 0xff6600 : 0x3498db)
-          .setDescription(lines.join("\n"))
+          .setDescription(description)
           .setFooter({ text: info.paused ? "⏸ Queue is paused" : "Queue is active" });
         await interaction.reply({ embeds: [embed] });
         break;
@@ -873,10 +910,14 @@ client.on("interactionCreate", async (interaction) => {
           return `${icon} ${prompt} ${time}`;
         });
 
+        let historyDesc = lines.join("\n");
+        if (historyDesc.length > 4000) {
+          historyDesc = historyDesc.slice(0, 4000) + "\n…(truncated)";
+        }
         const embed = new EmbedBuilder()
           .setTitle(`📜 Task History (last ${tasks.length})`)
           .setColor(0x9b59b6)
-          .setDescription(lines.join("\n"))
+          .setDescription(historyDesc)
           .setTimestamp();
         await interaction.reply({ embeds: [embed] });
         break;
@@ -928,28 +969,28 @@ client.on("interactionCreate", async (interaction) => {
         }
 
         const mode = interaction.options.getString("mode") || "stat";
-        const gitCmd =
+        const gitArgs =
           mode === "stat"
-            ? "git diff --stat"
+            ? ["diff", "--stat"]
             : mode === "staged"
-              ? "git diff --cached"
-              : "git diff";
+              ? ["diff", "--cached"]
+              : ["diff"];
 
         await interaction.deferReply();
 
         try {
-          const output = execSync(gitCmd, {
+          const { stdout } = await execFileAsync("git", gitArgs, {
             cwd: status.workspace,
             encoding: "utf-8",
             timeout: 15_000,
           });
 
-          if (!output.trim()) {
+          if (!stdout.trim()) {
             await interaction.editReply("No changes.");
             break;
           }
 
-          const clean = redactSecrets(output).clean;
+          const clean = redactSecrets(stdout).clean;
 
           if (clean.length <= 1900) {
             await interaction.editReply(`\`\`\`diff\n${clean}\n\`\`\``);
@@ -961,7 +1002,7 @@ client.on("interactionCreate", async (interaction) => {
             await interaction.editReply({ files: [attachment] });
           }
         } catch (err) {
-          await interaction.editReply(`❌ \`${gitCmd}\` failed: ${redactSecrets(err.message).clean}`);
+          await interaction.editReply(`❌ \`git ${gitArgs.join(" ")}\` failed: ${redactSecrets(err.message).clean}`);
         }
         break;
       }
@@ -987,12 +1028,12 @@ client.on("interactionCreate", async (interaction) => {
 
         if (action === "list") {
           try {
-            const branches = execSync("git branch --list", {
+            const { stdout } = await execFileAsync("git", ["branch", "--list"], {
               cwd: status.workspace,
               encoding: "utf-8",
               timeout: 5_000,
-            }).trim();
-            await interaction.reply(`\`\`\`\n${redactSecrets(branches).clean}\n\`\`\``);
+            });
+            await interaction.reply(`\`\`\`\n${redactSecrets(stdout.trim()).clean}\n\`\`\``);
           } catch (err) {
             await interaction.reply(`❌ Failed: ${redactSecrets(err.message).clean}`);
           }
@@ -1029,7 +1070,7 @@ client.on("interactionCreate", async (interaction) => {
 
         if (action === "create") {
           try {
-            execSync(`git checkout -b "${branchName}"`, {
+            await execFileAsync("git", ["checkout", "-b", branchName], {
               cwd: status.workspace,
               encoding: "utf-8",
               timeout: 10_000,
@@ -1043,7 +1084,7 @@ client.on("interactionCreate", async (interaction) => {
 
         if (action === "switch") {
           try {
-            execSync(`git checkout "${branchName}"`, {
+            await execFileAsync("git", ["checkout", branchName], {
               cwd: status.workspace,
               encoding: "utf-8",
               timeout: 10_000,
@@ -1193,11 +1234,8 @@ async function shutdown(signal) {
 
   // Send shutdown notification before destroying the client
   const shutdownEmbed = new EmbedBuilder()
-    .setTitle("\u{1F534} Bot Going Offline")
     .setColor(0xe74c3c)
-    .setDescription(`**${client.user?.tag ?? "Bot"}** is shutting down (${signal}).`)
-    .addFields({ name: "Project", value: PROJECT_NAME, inline: true })
-    .setTimestamp();
+    .setDescription(`\u{1F534} Offline — **${client.user?.tag ?? "Bot"}** (${signal})`);
 
   let adminNotified = false;
   if (ADMIN_USER_ID) {
@@ -1245,19 +1283,26 @@ client.on("shardReconnecting", (shardId) => {
 client.on("shardResume", async (shardId) => {
   log.info("Shard resumed", { shardId });
 
-  // Reconnect notification
-  if (STARTUP_CHANNEL_ID) {
+  // Reconnect notification — prefer admin DM, fallback to channel
+  const reconnectEmbed = new EmbedBuilder()
+    .setTitle("\u{1F7E1} Bot Reconnected")
+    .setColor(0xf1c40f)
+    .setDescription(`**${client.user?.tag ?? "Bot"}** has reconnected after a brief disconnect.`)
+    .addFields({ name: "Project", value: PROJECT_NAME, inline: true })
+    .setTimestamp();
+
+  let reconnectSent = false;
+  if (ADMIN_USER_ID) {
+    try {
+      const user = await client.users.fetch(ADMIN_USER_ID);
+      await user.send({ embeds: [reconnectEmbed] });
+      reconnectSent = true;
+    } catch { /* best effort */ }
+  }
+  if (!reconnectSent && STARTUP_CHANNEL_ID) {
     try {
       const ch = await client.channels.fetch(STARTUP_CHANNEL_ID);
-      if (ch?.isTextBased()) {
-        const embed = new EmbedBuilder()
-          .setTitle("\u{1F7E1} Bot Reconnected")
-          .setColor(0xf1c40f)
-          .setDescription(`**${client.user?.tag ?? "Bot"}** has reconnected after a brief disconnect.`)
-          .addFields({ name: "Project", value: PROJECT_NAME, inline: true })
-          .setTimestamp();
-        await ch.send({ embeds: [embed] });
-      }
+      if (ch?.isTextBased()) await ch.send({ embeds: [reconnectEmbed] });
     } catch (err) {
       log.warn("Failed to send reconnect notification", { error: err.message });
     }
