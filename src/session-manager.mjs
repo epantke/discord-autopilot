@@ -129,6 +129,8 @@ function _buildSessionCallbacks(channelId, channel) {
       }
       const ctx = sessions.get(channelId);
       if (ctx) ctx.awaitingPush = true;
+      // Finalize current output message before showing the approval embed
+      await ctx?.output?.breakMessage();
       try {
         return await createPushApprovalRequest(channel, sessions.get(channelId)?.workspacePath, command);
       } finally {
@@ -170,7 +172,11 @@ function _buildSessionCallbacks(channelId, channel) {
       ctx._toolsCompleted = (ctx._toolsCompleted || 0) + 1;
       if (!success && error) {
         const errMsg = typeof error === "string" ? error : error?.message || String(error);
-        ctx.output?.append(`\n❌ \`${toolName}\`: ${errMsg}\n`);
+        // Suppress noisy ripgrep "unrecognized file type" errors — non-critical,
+        // the agent continues working and these just clutter Discord output.
+        if (!/rg:\s*unrecognized file type/i.test(errMsg)) {
+          ctx.output?.append(`\n❌ \`${toolName}\`: ${errMsg}\n`);
+        }
       }
       const count = ctx._toolsCompleted;
       const icon = success ? "✅" : "❌";
@@ -185,6 +191,9 @@ function _buildSessionCallbacks(channelId, channel) {
     onUserQuestion: async (question, choices) => {
       const ctx = sessions.get(channelId);
       if (ctx) ctx.awaitingQuestion = true;
+
+      // Finalize current output message so the question appears after it
+      await ctx?.output?.breakMessage();
 
       const target = ctx?.output?.channel || channel;
       await target.send(

@@ -3,10 +3,25 @@ import { evaluateToolUse } from "./policy-engine.mjs";
 import { getActiveGrants } from "./grants.mjs";
 import { buildSelfAwarenessPrompt } from "./command-info.mjs";
 import { createLogger } from "./logger.mjs";
+import { join } from "node:path";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 const log = createLogger("copilot");
 
 const approveAll = () => ({ kind: "approved" });
+
+// Write a ripgrep config with extra type aliases (e.g. kt → *.kt) so the
+// Copilot CLI subprocess doesn't emit "unrecognized file type" errors.
+if (!process.env.RIPGREP_CONFIG_PATH) {
+  try {
+    const rgDir = join(tmpdir(), "discord-agent-rg");
+    mkdirSync(rgDir, { recursive: true });
+    const rgPath = join(rgDir, ".ripgreprc");
+    writeFileSync(rgPath, "--type-add\nkt:*.kt,*.kts\n", "utf-8");
+    process.env.RIPGREP_CONFIG_PATH = rgPath;
+  } catch { /* best-effort — grep errors are also filtered in session-manager */ }
+}
 
 let client = null;
 
