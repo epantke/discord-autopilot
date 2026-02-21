@@ -18,8 +18,15 @@ export function getCopilotClient() {
       useStdio: true,
       autoRestart: true,
     };
-    if (process.env.GITHUB_TOKEN) {
-      opts.githubToken = process.env.GITHUB_TOKEN;
+    // Only pass githubToken for OAuth tokens (gho_) — classic PATs (ghp_) and
+    // fine-grained PATs (github_pat_) are rejected by the Copilot API.
+    // Without a token, the SDK falls back to `gh auth` credentials.
+    const token = process.env.GITHUB_TOKEN;
+    if (token && token.startsWith("gho_")) {
+      opts.githubToken = token;
+    } else if (token && !token.startsWith("ghp_") && !token.startsWith("github_pat_")) {
+      // Unknown token format — pass it through and let the SDK decide
+      opts.githubToken = token;
     }
     client = new CopilotClient(opts);
   }

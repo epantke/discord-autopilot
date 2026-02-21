@@ -54,7 +54,7 @@ import {
   markStaleTasksAborted,
   resetStaleSessions,
 } from "./state.mjs";
-import { stopCopilotClient, getCopilotClient } from "./copilot-client.mjs";
+import { stopCopilotClient } from "./copilot-client.mjs";
 import { redactSecrets } from "./secret-scanner.mjs";
 import { createLogger } from "./logger.mjs";
 import { execSync } from "node:child_process";
@@ -439,17 +439,7 @@ async function validateEnvironment() {
         errors.push("GITHUB_TOKEN is expired or invalid (401). Generate a new one at https://github.com/settings/tokens");
       } else if (resp.status === 403) {
         warnings.push("GITHUB_TOKEN returned 403 (rate-limited or forbidden). The token may still work.");
-      } else if (resp.ok) {
-        // Check for copilot scope (classic PATs expose X-OAuth-Scopes)
-        const scopes = resp.headers.get("x-oauth-scopes") || "";
-        if (scopes && !scopes.split(",").map((s) => s.trim()).includes("copilot")) {
-          errors.push(
-            "GITHUB_TOKEN is missing the `copilot` scope. " +
-            "Edit your token at https://github.com/settings/tokens and enable the `copilot` scope, " +
-            "or run `copilot auth login` on the host."
-          );
-        }
-      } else {
+      } else if (!resp.ok) {
         warnings.push(`GITHUB_TOKEN validation returned HTTP ${resp.status}. Might be a transient issue.`);
       }
     } catch (err) {
@@ -473,12 +463,16 @@ async function validateEnvironment() {
     }
   }
 
-  // Check Copilot CLI auth — try to get the client (auth check happens on session creation,
-  // but we can at least verify the CLI binary is available)
+  // Check Copilot auth — the SDK uses `gh auth` credentials (not the GITHUB_TOKEN PAT)
   try {
-    getCopilotClient();
+    execSync("gh auth status", { encoding: "utf-8", timeout: 10_000, stdio: "pipe" });
   } catch (err) {
-    errors.push(`Copilot CLI is not available: ${err.message}. Run \`copilot auth login\` on the host.`);
+    const output = err.stdout || err.stderr || err.message || "";
+    if (output.includes("not logged")) {
+      errors.push("GitHub CLI is not authenticated. Run `gh auth login` so the Copilot SDK can use its credentials.");
+    } else {
+      warnings.push(`Could not verify gh auth status: ${output.slice(0, 120)}`);
+    }
   }
 
   if (errors.length > 0 || warnings.length > 0) {
