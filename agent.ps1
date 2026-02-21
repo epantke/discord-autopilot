@@ -65,7 +65,7 @@ function Write-Check {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1) Load .env if present, then single question: Repo URL
+# 1) Load .env, show banner, interactive setup wizard
 # ──────────────────────────────────────────────────────────────────────────────
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -99,24 +99,169 @@ Write-Host ('    ' + ([string][char]0x2550) * 46) -ForegroundColor DarkGray
 Write-Host '    Autonomous Remote Coding Agent' -ForegroundColor DarkGray -NoNewline
 Write-Host '   v1.0' -ForegroundColor DarkCyan
 Write-Host ('    ' + ([string][char]0x2550) * 46) -ForegroundColor DarkGray
-Write-Host ''
 
-$RepoUrl = $env:REPO_URL
-if ($RepoUrl) {
-    Write-Info "REPO_URL from environment: $RepoUrl"
-} else {
-    Write-Host '  ' -NoNewline
-    $RepoUrl = Read-Host "$([char]0x25B8) Repo URL"
+# ── Setup Wizard ─────────────────────────────────────────────────────────────
+
+$script:EnvChanged = $false   # track whether we need to offer .env save
+
+function Read-SecureInput {
+    param([string]$Prompt)
+    Write-Host "  $([char]0x25B8) " -ForegroundColor DarkCyan -NoNewline
+    return (Read-Host $Prompt)
 }
 
-if (-not $RepoUrl) { Write-Fatal 'No repo URL provided.' }
+# Detect what is already configured
+$cfgToken = $env:DISCORD_TOKEN
+$cfgRepo  = $env:REPO_URL
+$cfgGH    = $env:GITHUB_TOKEN
+
+$needSetup = (-not $cfgToken) -or (-not $cfgRepo)
+
+if ($needSetup) {
+    Write-Step 1 7 'Configuration'
+    Write-Host '  Some required settings are missing. Let''s configure them.' -ForegroundColor DarkGray
+    Write-Host '  Values from ' -ForegroundColor DarkGray -NoNewline
+    Write-Host '.env' -ForegroundColor Cyan -NoNewline
+    Write-Host ' and environment variables are used automatically.' -ForegroundColor DarkGray
+} else {
+    Write-Step 1 7 'Configuration'
+    Write-Ok 'All values loaded (DISCORD_TOKEN, REPO_URL)'
+}
+
+# ── 1. DISCORD_TOKEN ──
+if (-not $cfgToken) {
+    Write-Host ''
+    Write-Host '  ' -NoNewline
+    Write-Host ' DISCORD_TOKEN ' -ForegroundColor Black -BackgroundColor DarkCyan -NoNewline
+    Write-Host ' (required)' -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host '  How to get your token:' -ForegroundColor Gray
+    Write-Host '    1. Go to ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'https://discord.com/developers/applications' -ForegroundColor Cyan
+    Write-Host '    2. Click ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'New Application' -ForegroundColor White -NoNewline
+    Write-Host ' (or select existing)' -ForegroundColor DarkGray
+    Write-Host '    3. Go to ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'Bot' -ForegroundColor White -NoNewline
+    Write-Host ' tab ' -ForegroundColor DarkGray -NoNewline
+    Write-Host ([char]0x2192) -ForegroundColor DarkGray -NoNewline
+    Write-Host ' Reset Token ' -ForegroundColor White -NoNewline
+    Write-Host ([char]0x2192) -ForegroundColor DarkGray -NoNewline
+    Write-Host ' copy it' -ForegroundColor DarkGray
+    Write-Host '    4. Under ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'Privileged Gateway Intents' -ForegroundColor White -NoNewline
+    Write-Host ': enable ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'Message Content' -ForegroundColor Yellow
+    Write-Host '    5. Under ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'OAuth2 > URL Generator' -ForegroundColor White -NoNewline
+    Write-Host ':' -ForegroundColor DarkGray
+    Write-Host '       Scopes: ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'bot, applications.commands' -ForegroundColor White
+    Write-Host '       Permissions: ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'Send Messages, Embed Links, Attach Files, Use Slash Commands' -ForegroundColor White
+    Write-Host ''
+    $cfgToken = Read-SecureInput 'Paste your Discord bot token'
+    if (-not $cfgToken) { Write-Fatal 'DISCORD_TOKEN is required.' }
+    [Environment]::SetEnvironmentVariable('DISCORD_TOKEN', $cfgToken, 'Process')
+    $script:EnvChanged = $true
+    Write-Ok 'DISCORD_TOKEN set'
+} else {
+    Write-Ok 'DISCORD_TOKEN found'
+}
+
+# ── 2. REPO_URL ──
+if (-not $cfgRepo) {
+    Write-Host ''
+    Write-Host '  ' -NoNewline
+    Write-Host ' REPO_URL ' -ForegroundColor Black -BackgroundColor DarkCyan -NoNewline
+    Write-Host ' (required)' -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host '  The Git repository the agent will work on.' -ForegroundColor Gray
+    Write-Host '  HTTPS example: ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'https://github.com/owner/repo.git' -ForegroundColor Cyan
+    Write-Host '  SSH example:   ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'git@github.com:owner/repo.git' -ForegroundColor Cyan
+    Write-Host ''
+    $cfgRepo = Read-SecureInput 'Repository URL'
+    if (-not $cfgRepo) { Write-Fatal 'REPO_URL is required.' }
+    [Environment]::SetEnvironmentVariable('REPO_URL', $cfgRepo, 'Process')
+    $script:EnvChanged = $true
+    Write-Ok 'REPO_URL set'
+} else {
+    Write-Ok "REPO_URL: $cfgRepo"
+}
+$RepoUrl = $cfgRepo
+
+# ── 3. GITHUB_TOKEN (optional) ──
+if (-not $cfgGH) {
+    Write-Host ''
+    Write-Host '  ' -NoNewline
+    Write-Host ' GITHUB_TOKEN ' -ForegroundColor Black -BackgroundColor DarkGray -NoNewline
+    Write-Host ' (optional)' -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host '  Needed for private repos and higher API rate limits.' -ForegroundColor Gray
+    Write-Host '  Create one at: ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'https://github.com/settings/tokens' -ForegroundColor Cyan
+    Write-Host '  Required scopes: ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'repo' -ForegroundColor White
+    Write-Host '  Press ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'Enter' -ForegroundColor Yellow -NoNewline
+    Write-Host ' to skip.' -ForegroundColor DarkGray
+    Write-Host ''
+    $cfgGH = Read-SecureInput 'GitHub token (or Enter to skip)'
+    if ($cfgGH) {
+        [Environment]::SetEnvironmentVariable('GITHUB_TOKEN', $cfgGH, 'Process')
+        $script:EnvChanged = $true
+        Write-Ok 'GITHUB_TOKEN set'
+    } else {
+        Write-Info 'GITHUB_TOKEN skipped'
+    }
+} else {
+    Write-Ok 'GITHUB_TOKEN found'
+}
+
+# ── Offer to save .env ──
+if ($script:EnvChanged) {
+    Write-Host ''
+    Write-Host '  ' -NoNewline
+    Write-Host ' SAVE ' -ForegroundColor Black -BackgroundColor DarkYellow
+    Write-Host "  Save these values to " -ForegroundColor DarkGray -NoNewline
+    Write-Host $EnvFile -ForegroundColor Cyan -NoNewline
+    Write-Host '?' -ForegroundColor DarkGray
+    Write-Host '  So you don''t have to enter them again next time.' -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host '  ' -NoNewline
+    $saveAnswer = Read-Host "$([char]0x25B8) Save to .env? [Y/n]"
+    if ($saveAnswer -eq '' -or $saveAnswer -match '^[yYjJ]') {
+        $lines = @("# Discord x Copilot Agent — auto-generated $(Get-Date -Format 'yyyy-MM-dd')")
+        $lines += "DISCORD_TOKEN=$([Environment]::GetEnvironmentVariable('DISCORD_TOKEN','Process'))"
+        $lines += "REPO_URL=$([Environment]::GetEnvironmentVariable('REPO_URL','Process'))"
+        $gh = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN','Process')
+        if ($gh) { $lines += "GITHUB_TOKEN=$gh" }
+        # preserve any extra keys from existing .env
+        if (Test-Path $EnvFile) {
+            $known = @('DISCORD_TOKEN','REPO_URL','GITHUB_TOKEN')
+            Get-Content $EnvFile | ForEach-Object {
+                $l = $_.Trim()
+                if ($l -and -not $l.StartsWith('#') -and $l -match '^([^=]+)=') {
+                    if ($known -notcontains $Matches[1].Trim()) { $lines += $l }
+                }
+            }
+        }
+        [System.IO.File]::WriteAllLines($EnvFile, $lines, (New-Object System.Text.UTF8Encoding $false))
+        Write-Ok ".env saved ($($lines.Count - 1) values)"
+    } else {
+        Write-Info '.env not saved'
+    }
+}
+
 Write-Host ''
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 2) Prerequisite checks
 # ──────────────────────────────────────────────────────────────────────────────
 
-Write-Step 1 6 'Prerequisites'
+Write-Step 2 7 'Prerequisites'
 
 $Missing = @()
 
@@ -124,9 +269,9 @@ $hasGit  = [bool](Get-Command git -ErrorAction SilentlyContinue)
 $hasNode = [bool](Get-Command node -ErrorAction SilentlyContinue)
 $hasNpm  = [bool](Get-Command npm -ErrorAction SilentlyContinue)
 
-if (-not $hasGit)  { $Missing += 'git   -> https://git-scm.com/downloads' }
-if (-not $hasNode) { $Missing += 'node  -> https://nodejs.org/ (>= 18)' }
-if (-not $hasNpm)  { $Missing += 'npm   -> ships with node' }
+if (-not $hasGit)  { $Missing += 'git' }
+if (-not $hasNode) { $Missing += 'node' }
+if (-not $hasNpm)  { $Missing += 'npm' }
 
 # Copilot CLI: accept 'copilot' binary OR 'gh copilot' extension
 $CopilotCmd = ''
@@ -135,14 +280,12 @@ if (Get-Command copilot -ErrorAction SilentlyContinue) {
 } elseif (Get-Command gh -ErrorAction SilentlyContinue) {
     try { gh copilot --help 2>&1 | Out-Null; $CopilotCmd = 'gh copilot' } catch {}
 }
-if (-not $CopilotCmd) {
-    $Missing += 'copilot -> npm install -g @githubnext/github-copilot-cli  OR  gh extension install github/gh-copilot'
-}
+if (-not $CopilotCmd) { $Missing += 'copilot' }
 
-$gitVer  = if ($hasGit)  { (git --version) -replace 'git version ','' } else { 'missing' }
-$nodeVer = if ($hasNode) { (node -v) } else { 'missing' }
-$npmVer  = if ($hasNpm)  { (npm -v) } else { 'missing' }
-$copVer  = if ($CopilotCmd) { $CopilotCmd } else { 'missing' }
+$gitVer  = if ($hasGit)  { (git --version) -replace 'git version ','' } else { 'not found' }
+$nodeVer = if ($hasNode) { (node -v) } else { 'not found' }
+$npmVer  = if ($hasNpm)  { (npm -v) } else { 'not found' }
+$copVer  = if ($CopilotCmd) { $CopilotCmd } else { 'not found' }
 
 Write-Host "       $([char]0x250C)$(([string][char]0x2500) * 40)" -ForegroundColor DarkGray
 Write-Check 'git'     $gitVer   $hasGit
@@ -153,8 +296,28 @@ Write-Host "       $([char]0x2514)$(([string][char]0x2500) * 40)" -ForegroundCol
 
 if ($Missing.Count -gt 0) {
     Write-Host ''
-    $list = ($Missing | ForEach-Object { "  * $_" }) -join "`n"
-    Write-Fatal "Missing prerequisites:`n$list`n`nInstall them and re-run this script."
+    Write-Host '  ' -NoNewline
+    Write-Host ' MISSING TOOLS ' -ForegroundColor Black -BackgroundColor Red
+    Write-Host ''
+    $installGuide = @{
+        'git'     = @('https://git-scm.com/downloads', 'Download and run the installer.')
+        'node'    = @('https://nodejs.org/', 'Install LTS version (>= 18). npm is included.')
+        'npm'     = @('https://nodejs.org/', 'Comes bundled with Node.js.')
+        'copilot' = @('https://github.com/github/gh-copilot', 'Run: gh extension install github/gh-copilot')
+    }
+    foreach ($tool in $Missing) {
+        $guide = $installGuide[$tool]
+        Write-Host "    $([char]0x2718) " -ForegroundColor Red -NoNewline
+        Write-Host $tool -ForegroundColor White
+        Write-Host '      ' -NoNewline
+        Write-Host $guide[0] -ForegroundColor Cyan
+        Write-Host '      ' -NoNewline
+        Write-Host $guide[1] -ForegroundColor DarkGray
+        Write-Host ''
+    }
+    Write-Host '  Install the missing tools, then re-run this script.' -ForegroundColor Yellow
+    Write-Host ''
+    exit 1
 }
 
 # Node version check (>= 18)
@@ -162,7 +325,7 @@ $NodeMajor = [int](node -e "process.stdout.write(String(process.versions.node.sp
 if ($NodeMajor -lt 18) {
     Write-Fatal "Node.js >= 18 required (found v$(node -v)). Update: https://nodejs.org/"
 }
-Write-Ok "All prerequisites satisfied"
+Write-Ok 'All prerequisites satisfied'
 
 # Copilot auth check
 if ($CopilotCmd) {
@@ -174,28 +337,11 @@ if ($CopilotCmd) {
     }
 }
 
-# ENV check
-if (-not $env:DISCORD_TOKEN) {
-    Write-Host ''
-    Write-Fatal @"
-DISCORD_TOKEN is not set.
-
-  `$env:DISCORD_TOKEN = "your-bot-token-here"
-
-  Create a bot at https://discord.com/developers/applications
-  -> Bot -> Reset Token -> copy it.
-
-  Required bot permissions: Send Messages, Embed Links, Attach Files, Use Slash Commands
-  Required intents: Message Content
-"@
-}
-Write-Ok 'DISCORD_TOKEN is set'
-
 # ──────────────────────────────────────────────────────────────────────────────
 # 3) Derive project name & paths
 # ──────────────────────────────────────────────────────────────────────────────
 
-Write-Step 2 6 'Paths'
+Write-Step 3 7 'Paths'
 
 $ProjectName = [System.IO.Path]::GetFileNameWithoutExtension($RepoUrl) -replace '\.git$', ''
 $ProjectName = $ProjectName.Split('/')[-1]
@@ -229,7 +375,7 @@ foreach ($dir in @($Repos, (Join-Path $App 'src'), $Workspaces)) {
 # 4) Clone or update repo
 # ──────────────────────────────────────────────────────────────────────────────
 
-Write-Step 3 6 'Repository'
+Write-Step 4 7 'Repository'
 
 if (Test-Path (Join-Path $RepoDir '.git')) {
     Write-Info 'Updating existing repo...'
@@ -246,7 +392,7 @@ if (Test-Path (Join-Path $RepoDir '.git')) {
 # 5) Write application files
 # ──────────────────────────────────────────────────────────────────────────────
 
-Write-Step 4 6 'Source files'
+Write-Step 5 7 'Source files'
 
 # Helper: write UTF-8 without BOM (Node.js expects this)
 function Write-Utf8File {
@@ -1752,7 +1898,7 @@ Write-Ok '12 source files written'
 # 6) Install dependencies
 # ──────────────────────────────────────────────────────────────────────────────
 
-Write-Step 5 6 'Dependencies'
+Write-Step 6 7 'Dependencies'
 
 Write-Info 'Running npm install ...'
 Push-Location $App
@@ -1772,7 +1918,7 @@ try {
 # 7) Launch
 # ──────────────────────────────────────────────────────────────────────────────
 
-Write-Step 6 6 'Launch'
+Write-Step 7 7 'Launch'
 
 $elapsed = '{0:mm\:ss}' -f ((Get-Date) - $script:StartTime)
 
