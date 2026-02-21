@@ -11,7 +11,11 @@ function emit(level, component, message, data) {
   };
   if (data !== undefined) entry.data = data;
   const out = level === "error" ? process.stderr : process.stdout;
-  out.write(JSON.stringify(entry) + "\n");
+  try {
+    out.write(JSON.stringify(entry) + "\n");
+  } catch {
+    out.write(`{"ts":"${entry.ts}","level":"${level}","component":"${component}","msg":"${String(message).replace(/"/g, '\\'+'"')}","serializeError":true}\n`);
+  }
 }
 
 export function createLogger(component) {

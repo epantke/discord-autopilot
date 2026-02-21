@@ -117,8 +117,11 @@ export async function getOrCreateSession(channelId, channel) {
     branch = wt.branch;
   }
 
-  // Create Copilot session with policy hooks
-  const copilotSession = await createAgentSession({
+  // Create Copilot session with policy hooks — retry once on transient failure
+  let copilotSession;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      copilotSession = await createAgentSession({
     channelId,
     workspacePath,
 
@@ -179,6 +182,13 @@ export async function getOrCreateSession(channelId, channel) {
       }
     },
   });
+      break; // success
+    } catch (err) {
+      if (attempt >= 2) throw err;
+      log.warn("Session creation failed, retrying", { channelId, error: err.message });
+      await new Promise((r) => setTimeout(r, 2_000));
+    }
+  }
 
   const ctx = {
     copilotSession,
@@ -236,21 +246,24 @@ async function processQueue(channelId, channel) {
   ctx.taskId = insertTask(channelId, prompt);
   log.info("Task started", { channelId, taskId: ctx.taskId, prompt: prompt.slice(0, 100) });
 
+  let timeoutTimer;
   try {
-    const timeout = new Promise((_, reject) => {
-      const t = setTimeout(() => reject(new Error("Task timed out")), TASK_TIMEOUT_MS);
-      t.unref();
+    const timeout = new Promise((_, rej) => {
+      timeoutTimer = setTimeout(() => rej(new Error("Task timed out")), TASK_TIMEOUT_MS);
+      timeoutTimer.unref();
     });
     const response = await Promise.race([
       ctx.copilotSession.sendAndWait({ prompt }),
       timeout,
     ]);
+    clearTimeout(timeoutTimer);
     completeTask(ctx.taskId, "completed");
     log.info("Task completed", { channelId, taskId: ctx.taskId });
     ctx.status = "idle";
     updateSessionStatus(channelId, "idle");
     resolve(response);
   } catch (err) {
+    clearTimeout(timeoutTimer);
     // If aborted via /stop, cleanup was already handled
     if (ctx._aborted) {
       ctx._aborted = false;
@@ -325,20 +338,15 @@ export function getSessionStatus(channelId) {
 export async function resetSession(channelId) {
   const ctx = sessions.get(channelId);
   if (ctx) {
-    try {
-      ctx.copilotSession.abort();
-      ctx.copilotSession.destroy();
-    } catch {
-      // Ignore cleanup errors
-    }
-    // Reject pending queue items
+    try { ctx.copilotSession.abort(); } catch {}
+    try { ctx.copilotSession.destroy(); } catch {}
     for (const item of ctx.queue) {
-      item.reject(new Error("Session reset"));
+      try { item.reject(new Error("Session reset")); } catch {}
     }
   }
   sessions.delete(channelId);
-  revokeAllGrants(channelId);
-  dbDeleteSession(channelId);
+  try { revokeAllGrants(channelId); } catch (err) { log.error("Failed to revoke grants on reset", { channelId, error: err.message }); }
+  try { dbDeleteSession(channelId); } catch (err) { log.error("Failed to delete session from DB", { channelId, error: err.message }); }
 }
 
 // ── Hard Stop ───────────────────────────────────────────────────────────────

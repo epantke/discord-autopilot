@@ -40,9 +40,10 @@ export function redactSecrets(text) {
 
   for (const { label, re } of TOKEN_PATTERNS) {
     const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
-    if (global.test(clean)) {
+    const replaced = clean.replace(global, REDACTED);
+    if (replaced !== clean) {
       found.push(label);
-      clean = clean.replace(global, REDACTED);
+      clean = replaced;
     }
   }
 

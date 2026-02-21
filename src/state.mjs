@@ -221,6 +221,10 @@ export function purgeExpiredGrants() {
   return deleteExpiredGrants().changes;
 }
 
+let dbClosed = false;
+
 export function closeDb() {
+  if (dbClosed) return;
+  dbClosed = true;
   db.close();
 }

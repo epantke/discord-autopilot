@@ -23,6 +23,7 @@ export class DiscordOutput {
    * Append a chunk of text and schedule a throttled edit.
    */
   append(text) {
+    if (this.finished) return;
     this.buffer += text;
     this._scheduleEdit();
   }
@@ -31,6 +32,7 @@ export class DiscordOutput {
    * Post a standalone status line (e.g. tool execution info).
    */
   async status(text) {
+    if (this.finished) return;
     try {
       // If buffer is small enough, append inline
       if (this.buffer.length + text.length + 2 < 1900) {
@@ -57,7 +59,11 @@ export class DiscordOutput {
       this.editTimer = null;
     }
     if (epilogue) this.buffer += `\n${epilogue}`;
-    await this.flush();
+    try {
+      await this.flush();
+    } catch {
+      // Best-effort final flush
+    }
   }
 
   /**

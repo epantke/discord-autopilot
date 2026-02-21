@@ -64,7 +64,12 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
       .setStyle(ButtonStyle.Danger)
   );
 
-  const msg = await channel.send({ embeds: [embed], components: [row] });
+  let msg;
+  try {
+    msg = await channel.send({ embeds: [embed], components: [row] });
+  } catch (err) {
+    return { approved: false, user: `(send failed: ${err.message})` };
+  }
 
   return new Promise((resolve) => {
     const collector = msg.createMessageComponentCollector({
@@ -82,10 +87,12 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
         .setColor(color)
         .setFooter({ text: `${label} by ${interaction.user.tag}` });
 
-      await interaction.update({
-        embeds: [updatedEmbed],
-        components: [], // remove buttons
-      });
+      try {
+        await interaction.update({
+          embeds: [updatedEmbed],
+          components: [], // remove buttons
+        });
+      } catch {}
 
       resolve({ approved, user: interaction.user.tag });
     });
@@ -134,7 +141,7 @@ export async function executePush(channel, workspacePath, command) {
     });
 
     collector.on("collect", async (interaction) => {
-      await interaction.deferUpdate();
+      try { await interaction.deferUpdate(); } catch {}
       try {
         const prOutput = execSync("gh pr create --fill 2>&1", {
           cwd: workspacePath,

@@ -176,7 +176,8 @@ export async function createAgentSession(opts) {
  */
 export async function stopCopilotClient() {
   if (client) {
-    await client.stop();
+    const c = client;
     client = null;
+    try { await c.stop(); } catch {}
   }
 }

@@ -231,10 +231,14 @@ async function registerCommands(clientId) {
   if (ALLOWED_GUILDS && ALLOWED_GUILDS.size > 0) {
     // Guild-scoped (instant update)
     for (const guildId of ALLOWED_GUILDS) {
-      await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
-        body,
-      });
-      log.info("Registered slash commands", { guildId });
+      try {
+        await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
+          body,
+        });
+        log.info("Registered slash commands", { guildId });
+      } catch (err) {
+        log.error("Failed to register commands for guild", { guildId, error: err.message });
+      }
     }
   } else {
     // Global (may take up to 1h to propagate)
@@ -304,16 +308,22 @@ client.on("interactionCreate", async (interaction) => {
         const prompt = interaction.options.getString("prompt");
         await interaction.reply(`📋 **Task queued:** ${prompt}`);
 
-        // Create a thread for this task's output
-        const reply = await interaction.fetchReply();
-        const thread = await reply.startThread({
-          name: `Task: ${prompt.slice(0, 90)}`,
-          autoArchiveDuration: 1440,
-        });
+        // Create a thread for this task's output — fall back to channel on failure
+        let outputChannel = channel;
+        try {
+          const reply = await interaction.fetchReply();
+          const thread = await reply.startThread({
+            name: `Task: ${prompt.slice(0, 90)}`,
+            autoArchiveDuration: 1440,
+          });
+          outputChannel = thread;
+        } catch (err) {
+          log.warn("Failed to create thread, using channel", { error: err.message });
+        }
 
         // Fire and forget — streaming output handled by session manager
-        enqueueTask(channelId, channel, prompt, thread).catch((err) => {
-          thread
+        enqueueTask(channelId, channel, prompt, outputChannel).catch((err) => {
+          outputChannel
             .send(`❌ **Task failed:** ${err.message}`)
             .catch(() => {});
         });
@@ -674,6 +684,15 @@ client.on("interactionCreate", async (interaction) => {
           break;
         }
 
+        // Sanitize branch name: only allow safe characters
+        if (!/^[\w.\/-]{1,100}$/.test(branchName)) {
+          await interaction.reply({
+            content: "\u26A0\uFE0F Invalid branch name. Only letters, digits, `.`, `/`, `-`, `_` are allowed (max 100 chars).",
+            ephemeral: true,
+          });
+          break;
+        }
+
         // Guard: no branch operations while working
         if (status.status === "working") {
           await interaction.reply({
@@ -761,9 +780,9 @@ client.on("messageCreate", async (message) => {
 
 async function shutdown(signal) {
   log.info("Shutting down", { signal });
-  client.destroy();
-  await stopCopilotClient();
-  closeDb();
+  try { client.destroy(); } catch (err) { log.error("Client destroy failed", { error: err.message }); }
+  try { await stopCopilotClient(); } catch (err) { log.error("Copilot stop failed", { error: err.message }); }
+  try { closeDb(); } catch (err) { log.error("DB close failed", { error: err.message }); }
   process.exit(0);
 }
 
@@ -773,7 +792,30 @@ process.on("unhandledRejection", (err) => {
   log.error("Unhandled rejection", { error: err?.message || String(err) });
 });
 
+client.on("error", (err) => {
+  log.error("Discord client error", { error: err.message });
+});
+
+client.on("warn", (msg) => {
+  log.warn("Discord client warning", { message: msg });
+});
+
+client.on("shardDisconnect", (event, shardId) => {
+  log.warn("Shard disconnected", { shardId, code: event?.code });
+});
+
+client.on("shardReconnecting", (shardId) => {
+  log.info("Shard reconnecting", { shardId });
+});
+
+client.on("shardResume", (shardId) => {
+  log.info("Shard resumed", { shardId });
+});
+
 // ── Start ───────────────────────────────────────────────────────────────────
 
 log.info("Starting Discord bot");
-client.login(DISCORD_TOKEN);
+client.login(DISCORD_TOKEN).catch((err) => {
+  log.error("Failed to login to Discord", { error: err.message });
+  process.exit(1);
+});

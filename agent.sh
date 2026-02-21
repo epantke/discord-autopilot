@@ -155,7 +155,11 @@ function emit(level, component, message, data) {
   };
   if (data !== undefined) entry.data = data;
   const out = level === "error" ? process.stderr : process.stdout;
-  out.write(JSON.stringify(entry) + "\n");
+  try {
+    out.write(JSON.stringify(entry) + "\n");
+  } catch {
+    out.write(`{"ts":"${entry.ts}","level":"${level}","component":"${component}","msg":"${String(message).replace(/"/g, '\\'+'"')}","serializeError":true}\n`);
+  }
 }
 
 export function createLogger(component) {
@@ -202,9 +206,10 @@ export function redactSecrets(text) {
 
   for (const { label, re } of TOKEN_PATTERNS) {
     const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
-    if (global.test(clean)) {
+    const replaced = clean.replace(global, REDACTED);
+    if (replaced !== clean) {
       found.push(label);
-      clean = clean.replace(global, REDACTED);
+      clean = replaced;
     }
   }
 
@@ -256,26 +261,43 @@ const ALLOWED_GUILDS = csvToSet(process.env.ALLOWED_GUILDS);
 const ALLOWED_CHANNELS = csvToSet(process.env.ALLOWED_CHANNELS);
 const ADMIN_ROLE_IDS = csvToSet(process.env.ADMIN_ROLE_IDS);
 
-const DISCORD_EDIT_THROTTLE_MS = parseInt(
-  process.env.DISCORD_EDIT_THROTTLE_MS || "1500", 10
+function safeInt(envVal, fallback) {
+  const n = parseInt(envVal, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+const DISCORD_EDIT_THROTTLE_MS = safeInt(
+  process.env.DISCORD_EDIT_THROTTLE_MS, 1500
 );
 const DEFAULT_GRANT_MODE = "ro";
 const DEFAULT_GRANT_TTL_MIN = 30;
-const TASK_TIMEOUT_MS = parseInt(
-  process.env.TASK_TIMEOUT_MS || String(30 * 60_000), 10
+const TASK_TIMEOUT_MS = safeInt(
+  process.env.TASK_TIMEOUT_MS, 30 * 60_000
 );
-const RATE_LIMIT_WINDOW_MS = parseInt(
-  process.env.RATE_LIMIT_WINDOW_MS || "60000", 10
+const RATE_LIMIT_WINDOW_MS = safeInt(
+  process.env.RATE_LIMIT_WINDOW_MS, 60_000
 );
-const RATE_LIMIT_MAX = parseInt(
-  process.env.RATE_LIMIT_MAX || "10", 10
+const RATE_LIMIT_MAX = safeInt(
+  process.env.RATE_LIMIT_MAX, 10
 );
 
 export {
-  DISCORD_TOKEN, BASE_ROOT, WORKSPACES_ROOT, REPOS_ROOT, STATE_DB_PATH,
-  PROJECT_NAME, REPO_PATH, ALLOWED_GUILDS, ALLOWED_CHANNELS, ADMIN_ROLE_IDS,
-  DISCORD_EDIT_THROTTLE_MS, DEFAULT_GRANT_MODE, DEFAULT_GRANT_TTL_MIN,
-  TASK_TIMEOUT_MS, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX,
+  DISCORD_TOKEN,
+  BASE_ROOT,
+  WORKSPACES_ROOT,
+  REPOS_ROOT,
+  STATE_DB_PATH,
+  PROJECT_NAME,
+  REPO_PATH,
+  ALLOWED_GUILDS,
+  ALLOWED_CHANNELS,
+  ADMIN_ROLE_IDS,
+  DISCORD_EDIT_THROTTLE_MS,
+  DEFAULT_GRANT_MODE,
+  DEFAULT_GRANT_TTL_MIN,
+  TASK_TIMEOUT_MS,
+  RATE_LIMIT_WINDOW_MS,
+  RATE_LIMIT_MAX,
 };
 HEREDOC_CONFIG
 
@@ -412,7 +434,14 @@ export function getTaskHistory(channelId, limit = 10) { return stmtTaskHistory.a
 
 // ── Cleanup ─────────────────────────────────────────────────────────────────
 export function purgeExpiredGrants() { return deleteExpiredGrants().changes; }
-export function closeDb() { db.close(); }
+
+let dbClosed = false;
+
+export function closeDb() {
+  if (dbClosed) return;
+  dbClosed = true;
+  db.close();
+}
 HEREDOC_STATE
 
 # ── src/policy-engine.mjs ───────────────────────────────────────────────────
@@ -613,9 +642,14 @@ export class DiscordOutput {
     this._flushQueued = false;
   }
 
-  append(text) { this.buffer += text; this._scheduleEdit(); }
+  append(text) {
+    if (this.finished) return;
+    this.buffer += text;
+    this._scheduleEdit();
+  }
 
   async status(text) {
+    if (this.finished) return;
     try {
       if (this.buffer.length + text.length + 2 < 1900) {
         this.buffer += `\n${text}`;
@@ -632,7 +666,11 @@ export class DiscordOutput {
     this.finished = true;
     if (this.editTimer) { clearTimeout(this.editTimer); this.editTimer = null; }
     if (epilogue) this.buffer += `\n${epilogue}`;
-    await this.flush();
+    try {
+      await this.flush();
+    } catch {
+      // Best-effort final flush
+    }
   }
 
   async flush() {
@@ -728,7 +766,12 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
     new ButtonBuilder().setCustomId("push_reject").setLabel("\u274C Reject Push").setStyle(ButtonStyle.Danger)
   );
 
-  const msg = await channel.send({ embeds: [embed], components: [row] });
+  let msg;
+  try {
+    msg = await channel.send({ embeds: [embed], components: [row] });
+  } catch (err) {
+    return { approved: false, user: `(send failed: ${err.message})` };
+  }
 
   return new Promise((resolve) => {
     const collector = msg.createMessageComponentCollector({
@@ -743,7 +786,10 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
       const updatedEmbed = EmbedBuilder.from(embed)
         .setColor(color)
         .setFooter({ text: `${label} by ${interaction.user.tag}` });
-      await interaction.update({ embeds: [updatedEmbed], components: [] });
+      try {
+        await interaction.update({ embeds: [updatedEmbed], components: [] });
+      } catch {}
+
       resolve({ approved, user: interaction.user.tag });
     });
 
@@ -778,7 +824,7 @@ export async function executePush(channel, workspacePath, command) {
     });
 
     collector.on("collect", async (interaction) => {
-      await interaction.deferUpdate();
+      try { await interaction.deferUpdate(); } catch {}
       try {
         const prOutput = execSync("gh pr create --fill 2>&1", {
           cwd: workspacePath, encoding: "utf-8", timeout: 30_000, shell: true,
@@ -910,7 +956,11 @@ export async function createAgentSession(opts) {
 }
 
 export async function stopCopilotClient() {
-  if (client) { await client.stop(); client = null; }
+  if (client) {
+    const c = client;
+    client = null;
+    try { await c.stop(); } catch {}
+  }
 }
 HEREDOC_COPILOT
 
@@ -971,7 +1021,11 @@ export async function getOrCreateSession(channelId, channel) {
     workspacePath = wt.workspacePath; branch = wt.branch;
   }
 
-  const copilotSession = await createAgentSession({
+  // Create Copilot session with policy hooks — retry once on transient failure
+  let copilotSession;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      copilotSession = await createAgentSession({
     channelId, workspacePath,
     onPushRequest: async (command) => createPushApprovalRequest(channel, workspacePath, command),
     onOutsideRequest: (reason) => {
@@ -996,6 +1050,13 @@ export async function getOrCreateSession(channelId, channel) {
       } catch { return "No answer within timeout."; }
     },
   });
+      break; // success
+    } catch (err) {
+      if (attempt >= 2) throw err;
+      log.warn("Session creation failed, retrying", { channelId, error: err.message });
+      await new Promise((r) => setTimeout(r, 2_000));
+    }
+  }
 
   const ctx = {
     copilotSession, workspacePath, branch, status: "idle",
@@ -1028,14 +1089,17 @@ async function processQueue(channelId, channel) {
   ctx.taskId = insertTask(channelId, prompt);
   log.info("Task started", { channelId, taskId: ctx.taskId, prompt: prompt.slice(0, 100) });
 
+  let timeoutTimer;
   try {
-    const timeout = new Promise((_, rej) => { const t = setTimeout(() => rej(new Error("Task timed out")), TASK_TIMEOUT_MS); t.unref(); });
+    const timeout = new Promise((_, rej) => { timeoutTimer = setTimeout(() => rej(new Error("Task timed out")), TASK_TIMEOUT_MS); timeoutTimer.unref(); });
     const response = await Promise.race([ctx.copilotSession.sendAndWait({ prompt }), timeout]);
+    clearTimeout(timeoutTimer);
     completeTask(ctx.taskId, "completed");
     log.info("Task completed", { channelId, taskId: ctx.taskId });
     ctx.status = "idle"; updateSessionStatus(channelId, "idle");
     resolve(response);
   } catch (err) {
+    clearTimeout(timeoutTimer);
     if (ctx._aborted) { ctx._aborted = false; }
     else if (err.message === "Task timed out") {
       log.warn("Task timed out", { channelId, taskId: ctx.taskId, timeoutMs: TASK_TIMEOUT_MS });
@@ -1077,12 +1141,15 @@ export function getSessionStatus(channelId) {
 export async function resetSession(channelId) {
   const ctx = sessions.get(channelId);
   if (ctx) {
-    try { ctx.copilotSession.abort(); ctx.copilotSession.destroy(); } catch {}
-    for (const item of ctx.queue) item.reject(new Error("Session reset"));
+    try { ctx.copilotSession.abort(); } catch {}
+    try { ctx.copilotSession.destroy(); } catch {}
+    for (const item of ctx.queue) {
+      try { item.reject(new Error("Session reset")); } catch {}
+    }
   }
   sessions.delete(channelId);
-  revokeAllGrants(channelId);
-  dbDeleteSession(channelId);
+  try { revokeAllGrants(channelId); } catch (err) { log.error("Failed to revoke grants on reset", { channelId, error: err.message }); }
+  try { dbDeleteSession(channelId); } catch (err) { log.error("Failed to delete session from DB", { channelId, error: err.message }); }
 }
 
 export function hardStop(channelId, clearQueue = true) {
@@ -1229,8 +1296,12 @@ async function registerCommands(clientId) {
   const body = commands.map((c) => c.toJSON());
   if (ALLOWED_GUILDS && ALLOWED_GUILDS.size > 0) {
     for (const guildId of ALLOWED_GUILDS) {
-      await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body });
-      log.info("Registered commands", { guildId });
+      try {
+        await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body });
+        log.info("Registered commands", { guildId });
+      } catch (err) {
+        log.error("Failed to register commands for guild", { guildId, error: err.message });
+      }
     }
   } else {
     await rest.put(Routes.applicationCommands(clientId), { body });
@@ -1269,10 +1340,16 @@ client.on("interactionCreate", async (interaction) => {
       case "task": {
         const prompt = interaction.options.getString("prompt");
         await interaction.reply(`\u{1F4CB} **Task queued:** ${prompt}`);
-        const reply = await interaction.fetchReply();
-        const thread = await reply.startThread({ name: `Task: ${prompt.slice(0, 90)}`, autoArchiveDuration: 1440 });
-        enqueueTask(channelId, channel, prompt, thread).catch((err) => {
-          thread.send(`\u274C **Task failed:** ${err.message}`).catch(() => {});
+        let outputChannel = channel;
+        try {
+          const reply = await interaction.fetchReply();
+          const thread = await reply.startThread({ name: `Task: ${prompt.slice(0, 90)}`, autoArchiveDuration: 1440 });
+          outputChannel = thread;
+        } catch (err) {
+          log.warn("Failed to create thread, using channel", { error: err.message });
+        }
+        enqueueTask(channelId, channel, prompt, outputChannel).catch((err) => {
+          outputChannel.send(`\u274C **Task failed:** ${err.message}`).catch(() => {});
         });
         break;
       }
@@ -1425,6 +1502,10 @@ client.on("interactionCreate", async (interaction) => {
           break;
         }
         if (!branchName) { await interaction.reply({ content: `Provide a branch name for \`${action}\`.`, ephemeral: true }); break; }
+        if (!/^[\w.\/-]{1,100}$/.test(branchName)) {
+          await interaction.reply({ content: "\u26A0\uFE0F Invalid branch name. Only letters, digits, `.`, `/`, `-`, `_` allowed (max 100 chars).", ephemeral: true });
+          break;
+        }
         if (st.status === "working") { await interaction.reply({ content: "\u26A0\uFE0F Stop task first.", ephemeral: true }); break; }
         await interaction.deferReply();
         if (action === "create") {
@@ -1469,9 +1550,9 @@ client.on("messageCreate", async (message) => {
 
 async function shutdown(signal) {
   log.info("Shutting down", { signal });
-  client.destroy();
-  await stopCopilotClient();
-  closeDb();
+  try { client.destroy(); } catch (err) { log.error("Client destroy failed", { error: err.message }); }
+  try { await stopCopilotClient(); } catch (err) { log.error("Copilot stop failed", { error: err.message }); }
+  try { closeDb(); } catch (err) { log.error("DB close failed", { error: err.message }); }
   process.exit(0);
 }
 
@@ -1479,8 +1560,31 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("unhandledRejection", (err) => { log.error("Unhandled rejection", { error: err?.message || String(err) }); });
 
+client.on("error", (err) => {
+  log.error("Discord client error", { error: err.message });
+});
+
+client.on("warn", (msg) => {
+  log.warn("Discord client warning", { message: msg });
+});
+
+client.on("shardDisconnect", (event, shardId) => {
+  log.warn("Shard disconnected", { shardId, code: event?.code });
+});
+
+client.on("shardReconnecting", (shardId) => {
+  log.info("Shard reconnecting", { shardId });
+});
+
+client.on("shardResume", (shardId) => {
+  log.info("Shard resumed", { shardId });
+});
+
 log.info("Starting Discord bot");
-client.login(DISCORD_TOKEN);
+client.login(DISCORD_TOKEN).catch((err) => {
+  log.error("Failed to login to Discord", { error: err.message });
+  process.exit(1);
+});
 HEREDOC_BOT
 
 ok "All source files written"

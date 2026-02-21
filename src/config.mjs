@@ -34,23 +34,24 @@ const ALLOWED_CHANNELS = csvToSet(process.env.ALLOWED_CHANNELS);
 const ADMIN_ROLE_IDS = csvToSet(process.env.ADMIN_ROLE_IDS);
 
 // ── Tunables ────────────────────────────────────────────────────────────────
-const DISCORD_EDIT_THROTTLE_MS = parseInt(
-  process.env.DISCORD_EDIT_THROTTLE_MS || "1500",
-  10
+function safeInt(envVal, fallback) {
+  const n = parseInt(envVal, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+const DISCORD_EDIT_THROTTLE_MS = safeInt(
+  process.env.DISCORD_EDIT_THROTTLE_MS, 1500
 );
 const DEFAULT_GRANT_MODE = "ro";
 const DEFAULT_GRANT_TTL_MIN = 30;
-const TASK_TIMEOUT_MS = parseInt(
-  process.env.TASK_TIMEOUT_MS || String(30 * 60_000),
-  10
+const TASK_TIMEOUT_MS = safeInt(
+  process.env.TASK_TIMEOUT_MS, 30 * 60_000
 );
-const RATE_LIMIT_WINDOW_MS = parseInt(
-  process.env.RATE_LIMIT_WINDOW_MS || "60000",
-  10
+const RATE_LIMIT_WINDOW_MS = safeInt(
+  process.env.RATE_LIMIT_WINDOW_MS, 60_000
 );
-const RATE_LIMIT_MAX = parseInt(
-  process.env.RATE_LIMIT_MAX || "10",
-  10
+const RATE_LIMIT_MAX = safeInt(
+  process.env.RATE_LIMIT_MAX, 10
 );
 
 export {
