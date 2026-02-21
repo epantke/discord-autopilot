@@ -29,9 +29,9 @@ function csvToSet(envVal) {
   return new Set(envVal.split(",").map((s) => s.trim()).filter(Boolean));
 }
 
-const ALLOWED_GUILDS = csvToValidatedSet(process.env.ALLOWED_GUILDS, "ALLOWED_GUILDS") ?? csvToSet(process.env.ALLOWED_GUILDS);
-const ALLOWED_CHANNELS = csvToValidatedSet(process.env.ALLOWED_CHANNELS, "ALLOWED_CHANNELS") ?? csvToSet(process.env.ALLOWED_CHANNELS);
-const ADMIN_ROLE_IDS = csvToValidatedSet(process.env.ADMIN_ROLE_IDS, "ADMIN_ROLE_IDS") ?? csvToSet(process.env.ADMIN_ROLE_IDS);
+const ALLOWED_GUILDS = csvToValidatedSet(process.env.ALLOWED_GUILDS, "ALLOWED_GUILDS");
+const ALLOWED_CHANNELS = csvToValidatedSet(process.env.ALLOWED_CHANNELS, "ALLOWED_CHANNELS");
+const ADMIN_ROLE_IDS = csvToValidatedSet(process.env.ADMIN_ROLE_IDS, "ADMIN_ROLE_IDS");
 
 // ── Tunables ────────────────────────────────────────────────────────────────
 function safeInt(envVal, fallback) {

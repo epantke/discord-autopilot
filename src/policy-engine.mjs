@@ -35,8 +35,8 @@ export function isInsideWorkspace(targetPath, workspaceRoot) {
 // ── Git Push Detection ──────────────────────────────────────────────────────
 
 const GIT_PUSH_PATTERNS = [
-  /\bgit\s+push\b/i,
-  /\bgit\s+remote\s+.*push\b/i,
+  /\bgit\s+(?:(?:-[\w-]+(?:=\S+|\s+\S+)?)\s+)*push\b/i,
+  /\bgit\s+(?:(?:-[\w-]+(?:=\S+|\s+\S+)?)\s+)*remote\s+.*push\b/i,
   /\bgh\s+pr\s+create\b/i,
   /\bgh\s+pr\s+merge\b/i,
   /\bgh\s+pr\s+push\b/i,
@@ -183,7 +183,7 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
     }
 
     // Scan for ALL cd's into paths outside workspace
-    for (const cdMatch of cmd.matchAll(/\bcd\s+["']?([^\s"';&|]+)/g)) {
+    for (const cdMatch of cmd.matchAll(/\b(?:cd|pushd)\s+["']?([^\s"';&|]+)/g)) {
       const cdTarget = resolve(workspaceRoot, cdMatch[1]);
       if (!isInsideWorkspace(cdTarget, workspaceRoot) && !isGranted(cdTarget, grants, "ro")) {
         return {

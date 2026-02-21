@@ -421,8 +421,9 @@ export function hardStop(channelId, clearQueue = true) {
 export function pauseSession(channelId) {
   const ctx = sessions.get(channelId);
   if (!ctx) return { found: false };
+  const wasAlreadyPaused = ctx.paused;
   ctx.paused = true;
-  return { found: true, wasAlreadyPaused: false };
+  return { found: true, wasAlreadyPaused };
 }
 
 export function resumeSession(channelId, channel) {

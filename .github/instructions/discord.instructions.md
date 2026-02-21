@@ -23,7 +23,9 @@ applyTo: ["src/bot.mjs", "src/discord-output.mjs", "src/push-approval.mjs"]
 
 ## Output Streaming (`DiscordOutput`)
 - Throttled edits: one edit per `DISCORD_EDIT_THROTTLE_MS` (default 1500ms)
-- Buffer >1990 chars triggers attachment fallback (`.txt` file via `AttachmentBuilder`)
+- `content` accumulates full text per message (never cleared between flushes) — each edit shows the complete response so far
+- At 1800 chars, the current message is finalized and a new message starts (split at newline boundaries)
+- Content >1990 chars on final flush triggers attachment fallback (`.txt` file via `AttachmentBuilder`)
 - `flush()` is serialized — `_flushing` flag prevents concurrent Discord API calls
 - On edit failure (error code 10008/50005 = deleted message), retry with a new message
 

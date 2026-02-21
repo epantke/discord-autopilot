@@ -3,10 +3,19 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  MessageFlags,
 } from "discord.js";
 import { execSync } from "node:child_process";
 import { redactSecrets } from "./secret-scanner.mjs";
 import { ADMIN_ROLE_IDS } from "./config.mjs";
+
+function getBranch(cwd) {
+  try {
+    return execSync("git branch --show-current", { cwd, encoding: "utf-8", timeout: 5_000, stdio: ["pipe", "pipe", "pipe"] }).trim() || "(detached)";
+  } catch {
+    return "(unknown)";
+  }
+}
 
 /**
  * Collects git info and posts a push-approval embed with buttons.
@@ -41,15 +50,18 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
     logSummary = "(log unavailable)";
   }
 
+  const cleanCmd = redactSecrets(command.slice(0, 200)).clean;
+
   const embed = new EmbedBuilder()
     .setTitle("🚀 Push Approval Required")
     .setColor(0xff9900)
     .setDescription(
-      `The agent wants to execute:\n\`\`\`\n${command.slice(0, 200)}\n\`\`\``
+      `The agent wants to execute:\n\`\`\`\n${cleanCmd}\n\`\`\``
     )
     .addFields(
       { name: "Recent Commits", value: `\`\`\`\n${logSummary}\n\`\`\``, inline: false },
       { name: "Diff Summary", value: `\`\`\`\n${diffSummary}\n\`\`\``, inline: false },
+      { name: "Branch", value: getBranch(workspacePath), inline: true },
       { name: "Workspace", value: workspacePath, inline: true }
     )
     .setTimestamp();
@@ -80,7 +92,7 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
         if (ADMIN_ROLE_IDS) {
           const roles = i.member?.roles?.cache;
           if (!roles || ![...ADMIN_ROLE_IDS].some((id) => roles.has(id))) {
-            i.reply({ content: "\u26d4 You don't have permission to approve/reject pushes.", ephemeral: true }).catch(() => {});
+            i.reply({ content: "\u26d4 You don't have permission to approve/reject pushes.", flags: MessageFlags.Ephemeral }).catch(() => {});
             return false;
           }
         }

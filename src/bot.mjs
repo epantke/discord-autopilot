@@ -3,6 +3,7 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  MessageFlags,
   Partials,
   PermissionFlagsBits,
   REST,
@@ -34,7 +35,6 @@ import {
 import {
   enqueueTask,
   getSessionStatus,
-  approvePendingPush,
   resetSession,
   hardStop,
   pauseSession,
@@ -76,10 +76,6 @@ const commands = [
   new SlashCommandBuilder()
     .setName("status")
     .setDescription("Show current agent session status"),
-
-  new SlashCommandBuilder()
-    .setName("approve_push")
-    .setDescription("Approve a pending git push"),
 
   new SlashCommandBuilder()
     .setName("grant")
@@ -130,11 +126,13 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("pause")
-    .setDescription("Pause queue processing (current task finishes, no new ones start)"),
+    .setDescription("Pause queue processing (current task finishes, no new ones start)")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("resume")
-    .setDescription("Resume queue processing after a pause"),
+    .setDescription("Resume queue processing after a pause")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("queue")
@@ -211,8 +209,10 @@ const commands = [
 function isAllowed(interaction) {
   const isDM = !interaction.guildId;
 
-  // DMs bypass guild and role checks
-  if (isDM) return true;
+  // DMs: only allow if ADMIN_USER_ID is set and matches the sender
+  if (isDM) {
+    return ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID;
+  }
 
   if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(interaction.guildId)) return false;
   if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(interaction.channelId)) return false;
@@ -226,8 +226,10 @@ function isAllowed(interaction) {
 }
 
 function isAdmin(interaction) {
-  // DM users are treated as admins (they have direct bot access)
-  if (!interaction.guildId) return true;
+  // DM users must match ADMIN_USER_ID to be treated as admin
+  if (!interaction.guildId) {
+    return ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID;
+  }
   if (!ADMIN_ROLE_IDS) return true;
   const memberRoles = interaction.member?.roles?.cache;
   return memberRoles ? [...ADMIN_ROLE_IDS].some((id) => memberRoles.has(id)) : false;
@@ -251,6 +253,25 @@ function isRateLimited(interaction) {
     rateLimitMap.set(userId, timestamps);
   }
   // Remove entries outside the window
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  while (timestamps.length > 0 && timestamps[0] <= cutoff) timestamps.shift();
+  if (timestamps.length === 0) { rateLimitMap.delete(userId); }
+  if (timestamps.length >= RATE_LIMIT_MAX) return true;
+  timestamps.push(now);
+  return false;
+}
+
+/**
+ * Lightweight rate-limiter for messageCreate follow-ups (DMs + threads).
+ * Reuses the same window/max as slash commands.
+ */
+function isDmRateLimited(userId) {
+  const now = Date.now();
+  let timestamps = rateLimitMap.get(userId);
+  if (!timestamps) {
+    timestamps = [];
+    rateLimitMap.set(userId, timestamps);
+  }
   const cutoff = now - RATE_LIMIT_WINDOW_MS;
   while (timestamps.length > 0 && timestamps[0] <= cutoff) timestamps.shift();
   if (timestamps.length === 0) { rateLimitMap.delete(userId); }
@@ -592,7 +613,7 @@ client.on("interactionCreate", async (interaction) => {
   if (!isAllowed(interaction)) {
     await interaction.reply({
       content: "⛔ You don't have permission to use this bot.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
@@ -600,7 +621,7 @@ client.on("interactionCreate", async (interaction) => {
   if (isRateLimited(interaction)) {
     await interaction.reply({
       content: `⏳ Rate limited — max ${RATE_LIMIT_MAX} commands per ${Math.round(RATE_LIMIT_WINDOW_MS / 1000)}s. Please wait.`,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
@@ -643,7 +664,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!status) {
           await interaction.reply({
             content: "No active session for this channel. Use `/task` to start one.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
@@ -678,18 +699,6 @@ client.on("interactionCreate", async (interaction) => {
         break;
       }
 
-      // ── /approve_push ─────────────────────────────────────────────────
-      case "approve_push": {
-        await interaction.deferReply();
-        const result = await approvePendingPush(channelId, channel);
-        if (!result.found) {
-          await interaction.editReply("No active session found. Use `/task` first.");
-        } else {
-          await interaction.editReply("✅ Push approval noted.");
-        }
-        break;
-      }
-
       // ── /grant ────────────────────────────────────────────────────────
       case "grant": {
         const grantPath = interaction.options.getString("path");
@@ -700,7 +709,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!grantPath.startsWith("/") && !grantPath.match(/^[A-Z]:\\/i)) {
           await interaction.reply({
             content: "⚠️ Path must be absolute (e.g. `/home/user/data` or `C:\\Users\\...`).",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
@@ -735,7 +744,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!result.found) {
           await interaction.reply({
             content: "No active session to stop.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
@@ -753,7 +762,14 @@ client.on("interactionCreate", async (interaction) => {
         if (!result.found) {
           await interaction.reply({
             content: "No active session to pause.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+        if (result.wasAlreadyPaused) {
+          await interaction.reply({
+            content: "Session is already paused.",
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
@@ -770,14 +786,14 @@ client.on("interactionCreate", async (interaction) => {
         if (!result.found) {
           await interaction.reply({
             content: "No active session to resume.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
         if (!result.wasPaused) {
           await interaction.reply({
             content: "Session was not paused.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
@@ -794,7 +810,7 @@ client.on("interactionCreate", async (interaction) => {
           if (!result.found) {
             await interaction.reply({
               content: "No active session.",
-              ephemeral: true,
+              flags: MessageFlags.Ephemeral,
             });
             break;
           }
@@ -811,7 +827,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!info) {
           await interaction.reply({
             content: "No active session. Use `/task` to start one.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
@@ -819,7 +835,7 @@ client.on("interactionCreate", async (interaction) => {
         if (info.length === 0) {
           await interaction.reply({
             content: `Queue is empty.${info.paused ? " *(paused)*" : ""}`,
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
@@ -844,7 +860,7 @@ client.on("interactionCreate", async (interaction) => {
         if (tasks.length === 0) {
           await interaction.reply({
             content: "No task history for this channel.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
@@ -896,7 +912,7 @@ client.on("interactionCreate", async (interaction) => {
             }
           )
           .setTimestamp();
-        await interaction.reply({ embeds: [embed], ephemeral: true });
+        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
         break;
       }
 
@@ -906,7 +922,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!status) {
           await interaction.reply({
             content: "No active session. Use `/task` first.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
@@ -956,7 +972,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!status) {
           await interaction.reply({
             content: "No active session. Use `/task` first.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
@@ -976,7 +992,7 @@ client.on("interactionCreate", async (interaction) => {
               encoding: "utf-8",
               timeout: 5_000,
             }).trim();
-            await interaction.reply(`\`\`\`\n${branches}\n\`\`\``);
+            await interaction.reply(`\`\`\`\n${redactSecrets(branches).clean}\n\`\`\``);
           } catch (err) {
             await interaction.reply(`❌ Failed: ${redactSecrets(err.message).clean}`);
           }
@@ -986,7 +1002,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!branchName) {
           await interaction.reply({
             content: `Please provide a branch name for \`${action}\`.`,
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
@@ -995,7 +1011,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!/^[\w.\/-]{1,100}$/.test(branchName)) {
           await interaction.reply({
             content: "\u26A0\uFE0F Invalid branch name. Only letters, digits, `.`, `/`, `-`, `_` are allowed (max 100 chars).",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
@@ -1004,7 +1020,7 @@ client.on("interactionCreate", async (interaction) => {
         if (status.status === "working") {
           await interaction.reply({
             content: "⚠️ Cannot switch/create branches while a task is running. Use `/stop` first.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
           break;
         }
@@ -1054,7 +1070,7 @@ client.on("interactionCreate", async (interaction) => {
           )
           .setFooter({ text: `${commands.length} commands available` })
           .setTimestamp();
-        await interaction.reply({ embeds: [embed], ephemeral: true });
+        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
         break;
       }
 
@@ -1088,13 +1104,13 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       default:
-        await interaction.reply({ content: "Unknown command.", ephemeral: true });
+        await interaction.reply({ content: "Unknown command.", flags: MessageFlags.Ephemeral });
     }
   } catch (err) {
     log.error("Command error", { command: commandName, error: err.message });
     const reply = interaction.deferred || interaction.replied
       ? (msg) => interaction.editReply(msg)
-      : (msg) => interaction.reply({ content: msg, ephemeral: true });
+      : (msg) => interaction.reply({ content: msg, flags: MessageFlags.Ephemeral });
     await reply(`❌ Error: ${redactSecrets(err.message).clean}`).catch(() => {});
   }
 });
@@ -1106,8 +1122,9 @@ client.on("messageCreate", async (message) => {
 
   const isDM = !message.guild;
 
-  // ── DM follow-ups: if a session exists for this DM channel, treat as follow-up
+  // ── DM follow-ups: only allow if ADMIN_USER_ID matches the sender
   if (isDM) {
+    if (!ADMIN_USER_ID || message.author.id !== ADMIN_USER_ID) return;
     const dmChannelId = message.channel.id;
     const status = getSessionStatus(dmChannelId);
     if (!status) return; // No active session in this DM — ignore
@@ -1115,7 +1132,14 @@ client.on("messageCreate", async (message) => {
     const prompt = message.content.trim();
     if (!prompt) return;
 
+    // Rate-limit DM follow-ups (reuse interaction rate-limiter)
+    if (isDmRateLimited(message.author.id)) {
+      message.react("⏳").catch(() => {});
+      return;
+    }
+
     log.info("Follow-up in DM", { channelId: dmChannelId, prompt: prompt.slice(0, 100) });
+    message.react("✅").catch(() => {});
 
     enqueueTask(dmChannelId, message.channel, prompt, message.channel, { id: message.author.id, tag: message.author.tag }).catch((err) => {
       message.channel
@@ -1146,7 +1170,14 @@ client.on("messageCreate", async (message) => {
   const prompt = message.content.trim();
   if (!prompt) return;
 
+  // Rate-limit thread follow-ups
+  if (isDmRateLimited(message.author.id)) {
+    message.react("⏳").catch(() => {});
+    return;
+  }
+
   log.info("Follow-up in thread", { channelId: parentId, threadId: message.channel.id, prompt: prompt.slice(0, 100) });
+  message.react("✅").catch(() => {});
 
   enqueueTask(parentId, parent, prompt, message.channel, { id: message.author.id, tag: message.author.tag }).catch((err) => {
     message.channel
