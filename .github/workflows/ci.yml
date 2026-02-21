@@ -17,12 +17,17 @@ jobs:
   build:
     name: Build scripts
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Install dependencies
+        run: cd src && npm ci
 
       - name: Run build
         run: node build.mjs
@@ -38,6 +43,8 @@ jobs:
     name: Verify artifacts
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -133,6 +140,17 @@ jobs:
         run: |
           bash -n dist/agent.sh
           echo "✓ agent.sh passes bash -n syntax check"
+
+      # --- PowerShell syntax check ---
+      - name: PowerShell syntax check
+        shell: pwsh
+        run: |
+          $null = [System.Management.Automation.Language.Parser]::ParseFile("$PWD/dist/agent.ps1", [ref]$null, [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.ToString() }
+            exit 1
+          }
+          Write-Host "✓ agent.ps1 passes PowerShell syntax check"
 
   # ── Release ────────────────────────────────────────────────────────────────
   release:

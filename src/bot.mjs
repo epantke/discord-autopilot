@@ -45,6 +45,10 @@ import {
   getTaskHistory,
   getActiveSessionCount,
   isAwaitingQuestion,
+  addChannelResponder,
+  removeChannelResponder,
+  getChannelResponders,
+  updateBranch,
 } from "./session-manager.mjs";
 
 import { addGrant, revokeGrant, startGrantCleanup, restoreGrants } from "./grants.mjs";
@@ -207,6 +211,25 @@ const commands = [
   new SlashCommandBuilder()
     .setName("stats")
     .setDescription("Show bot statistics and uptime"),
+
+  new SlashCommandBuilder()
+    .setName("responders")
+    .setDescription("Manage who can answer agent questions")
+    .addStringOption((opt) =>
+      opt
+        .setName("action")
+        .setDescription("What to do")
+        .setRequired(true)
+        .addChoices(
+          { name: "Add user", value: "add" },
+          { name: "Remove user", value: "remove" },
+          { name: "List responders", value: "list" }
+        )
+    )
+    .addUserOption((opt) =>
+      opt.setName("user").setDescription("User to add/remove")
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 ];
 
 // ── Access Control ──────────────────────────────────────────────────────────
@@ -660,7 +683,11 @@ client.on("interactionCreate", async (interaction) => {
       // ── /task ─────────────────────────────────────────────────────────
       case "task": {
         const prompt = interaction.options.getString("prompt");
-        await interaction.reply(`📋 **Task queued:** ${prompt}`);
+        // Show queue position if there are other tasks ahead
+        const queueInfo = getQueueInfo(channelId);
+        const pos = queueInfo?.length || 0;
+        const posHint = pos > 0 ? ` *(queue position: ${pos + 1})*` : "";
+        await interaction.reply(`📋 **Task queued:** ${prompt}${posHint}`);
 
         // Create a thread for this task's output — fall back to channel on failure
         let outputChannel = channel;
@@ -675,8 +702,11 @@ client.on("interactionCreate", async (interaction) => {
           log.warn("Failed to create thread, using channel", { error: err.message });
         }
 
-        // Fire and forget — streaming output handled by session manager
+        // Fire and forget — streaming output handled by session manager.
+        // processQueue already reports task errors via output.finish(),
+        // so only show pre-queue errors (queue full, prompt too long, session creation failure).
         enqueueTask(channelId, channel, prompt, outputChannel, { id: interaction.user.id, tag: interaction.user.tag }).catch((err) => {
+          if (err._reportedByOutput) return;
           outputChannel
             .send(`❌ **Task failed:** ${redactSecrets(err.message).clean}`)
             .catch(() => {});
@@ -1078,6 +1108,7 @@ client.on("interactionCreate", async (interaction) => {
               encoding: "utf-8",
               timeout: 10_000,
             });
+            updateBranch(channelId, branchName);
             await interaction.editReply(`✅ Created and switched to branch \`${branchName}\`.`);
           } catch (err) {
             await interaction.editReply(`❌ Failed: ${redactSecrets(err.message).clean}`);
@@ -1092,6 +1123,7 @@ client.on("interactionCreate", async (interaction) => {
               encoding: "utf-8",
               timeout: 10_000,
             });
+            updateBranch(channelId, branchName);
             await interaction.editReply(`✅ Switched to branch \`${branchName}\`.`);
           } catch (err) {
             await interaction.editReply(`❌ Failed: ${redactSecrets(err.message).clean}`);
@@ -1144,6 +1176,46 @@ client.on("interactionCreate", async (interaction) => {
           )
           .setTimestamp();
         await interaction.reply({ embeds: [embed] });
+        break;
+      }
+
+      // ── /responders ─────────────────────────────────────────────────
+      case "responders": {
+        const action = interaction.options.getString("action");
+        const user = interaction.options.getUser("user");
+
+        if (action === "list") {
+          const responders = getChannelResponders(channelId);
+          if (responders.size === 0) {
+            await interaction.reply({
+              content: "No responders configured — only admins can answer agent questions.",
+              flags: MessageFlags.Ephemeral,
+            });
+          } else {
+            const list = [...responders].map((id) => `<@${id}>`).join(", ");
+            await interaction.reply({
+              content: `**Responders:** ${list}`,
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+          break;
+        }
+
+        if (!user) {
+          await interaction.reply({
+            content: "⚠️ Please provide a user (`user` option).",
+            flags: MessageFlags.Ephemeral,
+          });
+          break;
+        }
+
+        if (action === "add") {
+          addChannelResponder(channelId, user.id);
+          await interaction.reply(`✅ <@${user.id}> can now answer agent questions in this channel.`);
+        } else if (action === "remove") {
+          removeChannelResponder(channelId, user.id);
+          await interaction.reply(`🔒 <@${user.id}> removed as responder.`);
+        }
         break;
       }
 

@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { realpathSync } from "node:fs";
 import { DEFAULT_GRANT_MODE, DEFAULT_GRANT_TTL_MIN } from "./config.mjs";
 import {
   upsertGrant,
@@ -44,7 +45,12 @@ export function getActiveGrants(channelId) {
 export function addGrant(channelId, grantPath, mode, ttlMinutes) {
   mode = mode || DEFAULT_GRANT_MODE;
   ttlMinutes = ttlMinutes ?? DEFAULT_GRANT_TTL_MIN;
-  grantPath = resolve(grantPath);
+  // Resolve symlinks so grant paths match policy-engine's realpathSync checks
+  try {
+    grantPath = realpathSync(resolve(grantPath));
+  } catch {
+    grantPath = resolve(grantPath);
+  }
 
   const expiry = Date.now() + ttlMinutes * 60_000;
   const expiresAt = new Date(expiry).toISOString();

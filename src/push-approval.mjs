@@ -5,13 +5,17 @@ import {
   ButtonStyle,
   MessageFlags,
 } from "discord.js";
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { redactSecrets } from "./secret-scanner.mjs";
-import { ADMIN_ROLE_IDS } from "./config.mjs";
+import { ADMIN_ROLE_IDS, ADMIN_USER_ID } from "./config.mjs";
 
-function getBranch(cwd) {
+const execFileAsync = promisify(execFile);
+
+async function getBranch(cwd) {
   try {
-    return execSync("git branch --show-current", { cwd, encoding: "utf-8", timeout: 5_000, stdio: ["pipe", "pipe", "pipe"] }).trim() || "(detached)";
+    const { stdout } = await execFileAsync("git", ["branch", "--show-current"], { cwd, encoding: "utf-8", timeout: 5_000 });
+    return stdout.trim() || "(detached)";
   } catch {
     return "(unknown)";
   }
@@ -26,26 +30,32 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
   let logSummary = "";
 
   try {
-    diffSummary = redactSecrets(
-      execSync("git diff --stat HEAD~1 || git diff --stat", {
+    const { stdout } = await execFileAsync("git", ["diff", "--stat", "HEAD~1"], {
+      cwd: workspacePath,
+      encoding: "utf-8",
+      timeout: 10_000,
+    });
+    diffSummary = redactSecrets(stdout.slice(0, 900)).clean;
+  } catch {
+    try {
+      const { stdout } = await execFileAsync("git", ["diff", "--stat"], {
         cwd: workspacePath,
         encoding: "utf-8",
         timeout: 10_000,
-        stdio: ["pipe", "pipe", "pipe"],
-      }).slice(0, 900)
-    ).clean;
-  } catch {
-    diffSummary = "(diff unavailable)";
+      });
+      diffSummary = redactSecrets(stdout.slice(0, 900)).clean;
+    } catch {
+      diffSummary = "(diff unavailable)";
+    }
   }
 
   try {
-    logSummary = redactSecrets(
-      execSync("git log --oneline -5", {
-        cwd: workspacePath,
-        encoding: "utf-8",
-        timeout: 5_000,
-      }).slice(0, 500)
-    ).clean;
+    const { stdout } = await execFileAsync("git", ["log", "--oneline", "-5"], {
+      cwd: workspacePath,
+      encoding: "utf-8",
+      timeout: 5_000,
+    });
+    logSummary = redactSecrets(stdout.slice(0, 500)).clean;
   } catch {
     logSummary = "(log unavailable)";
   }
@@ -61,7 +71,7 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
     .addFields(
       { name: "Recent Commits", value: `\`\`\`\n${logSummary}\n\`\`\``, inline: false },
       { name: "Diff Summary", value: `\`\`\`\n${diffSummary}\n\`\`\``, inline: false },
-      { name: "Branch", value: getBranch(workspacePath), inline: true },
+      { name: "Branch", value: await getBranch(workspacePath), inline: true },
       { name: "Workspace", value: workspacePath, inline: true }
     )
     .setTimestamp();
@@ -88,8 +98,10 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
     const collector = msg.createMessageComponentCollector({
       filter: (i) => {
         if (i.customId !== "push_approve" && i.customId !== "push_reject") return false;
-        // RBAC: only admins can approve/reject pushes
-        if (ADMIN_ROLE_IDS) {
+        // RBAC: admins can approve/reject pushes
+        // In DMs (no member/roles), fall back to ADMIN_USER_ID check
+        const isAdminUser = ADMIN_USER_ID && i.user.id === ADMIN_USER_ID;
+        if (!isAdminUser && ADMIN_ROLE_IDS) {
           const roles = i.member?.roles?.cache;
           if (!roles || ![...ADMIN_ROLE_IDS].some((id) => roles.has(id))) {
             i.reply({ content: "\u26d4 You don't have permission to approve/reject pushes.", flags: MessageFlags.Ephemeral }).catch(() => {});

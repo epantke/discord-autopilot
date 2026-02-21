@@ -10,83 +10,51 @@ const db = new Database(STATE_DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
-// ── Migrations ──────────────────────────────────────────────────────────────
+// ── Schema ──────────────────────────────────────────────────────────────────
 
-db.exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sessions (
+    channel_id     TEXT PRIMARY KEY,
+    project_name   TEXT NOT NULL,
+    workspace_path TEXT NOT NULL,
+    branch         TEXT NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'idle',
+    created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 
-function getSchemaVersion() {
-  const row = db.prepare("SELECT version FROM schema_version").get();
-  return row ? row.version : 0;
-}
+  CREATE TABLE IF NOT EXISTS grants (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id  TEXT NOT NULL,
+    path        TEXT NOT NULL,
+    mode        TEXT NOT NULL DEFAULT 'ro',
+    expires_at  TEXT NOT NULL,
+    UNIQUE(channel_id, path)
+  );
 
-function setSchemaVersion(v) {
-  db.exec("DELETE FROM schema_version");
-  db.prepare("INSERT INTO schema_version (version) VALUES (?)").run(v);
-}
+  CREATE TABLE IF NOT EXISTS task_history (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id   TEXT NOT NULL,
+    prompt       TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'running',
+    started_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT,
+    timeout_ms   INTEGER
+  );
 
-/**
- * Each entry is a function(db) that runs inside the upgrade transaction.
- * Index 0 = migration from v0→v1, index 1 = v1→v2, etc.
- */
-const migrations = [
-  // v0 → v1: baseline schema
-  (db) => {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        channel_id    TEXT PRIMARY KEY,
-        project_name  TEXT NOT NULL,
-        workspace_path TEXT NOT NULL,
-        branch        TEXT NOT NULL,
-        status        TEXT NOT NULL DEFAULT 'idle',
-        created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-      );
+  CREATE TABLE IF NOT EXISTS responders (
+    channel_id TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    added_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(channel_id, user_id)
+  );
 
-      CREATE TABLE IF NOT EXISTS grants (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        channel_id  TEXT NOT NULL,
-        path        TEXT NOT NULL,
-        mode        TEXT NOT NULL DEFAULT 'ro',
-        expires_at  TEXT NOT NULL,
-        UNIQUE(channel_id, path)
-      );
-
-      CREATE TABLE IF NOT EXISTS task_history (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        channel_id   TEXT NOT NULL,
-        prompt       TEXT NOT NULL,
-        status       TEXT NOT NULL DEFAULT 'running',
-        started_at   TEXT NOT NULL DEFAULT (datetime('now')),
-        completed_at TEXT
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_task_history_channel
-        ON task_history(channel_id, started_at DESC);
-
-      CREATE INDEX IF NOT EXISTS idx_grants_channel
-        ON grants(channel_id);
-    `);
-  },
-
-  // v1 → v2: add timeout_ms to task_history
-  (db) => {
-    db.exec(`ALTER TABLE task_history ADD COLUMN timeout_ms INTEGER`);
-  },
-];
-
-function runMigrations() {
-  const current = getSchemaVersion();
-  if (current >= migrations.length) return;
-
-  const upgrade = db.transaction(() => {
-    for (let i = current; i < migrations.length; i++) {
-      migrations[i](db);
-    }
-    setSchemaVersion(migrations.length);
-  });
-  upgrade();
-}
-
-runMigrations();
+  CREATE INDEX IF NOT EXISTS idx_task_history_channel
+    ON task_history(channel_id, started_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_grants_channel
+    ON grants(channel_id);
+  CREATE INDEX IF NOT EXISTS idx_responders_channel
+    ON responders(channel_id);
+`);
 
 // ── Sessions ────────────────────────────────────────────────────────────────
 const stmtUpsertSession = db.prepare(`
@@ -178,6 +146,39 @@ export function deleteGrantsByChannel(channelId) {
   stmtDeleteGrantsByChannel.run(channelId);
 }
 
+// ── Responders ──────────────────────────────────────────────────────────────
+const stmtAddResponder = db.prepare(
+  `INSERT OR IGNORE INTO responders (channel_id, user_id) VALUES (?, ?)`
+);
+
+const stmtRemoveResponder = db.prepare(
+  `DELETE FROM responders WHERE channel_id = ? AND user_id = ?`
+);
+
+const stmtGetResponders = db.prepare(
+  `SELECT user_id FROM responders WHERE channel_id = ?`
+);
+
+const stmtDeleteRespondersByChannel = db.prepare(
+  `DELETE FROM responders WHERE channel_id = ?`
+);
+
+export function addResponder(channelId, userId) {
+  stmtAddResponder.run(channelId, userId);
+}
+
+export function removeResponder(channelId, userId) {
+  return stmtRemoveResponder.run(channelId, userId).changes;
+}
+
+export function getResponders(channelId) {
+  return stmtGetResponders.all(channelId);
+}
+
+export function deleteRespondersByChannel(channelId) {
+  stmtDeleteRespondersByChannel.run(channelId);
+}
+
 // ── Task History ────────────────────────────────────────────────────────────
 const stmtInsertTask = db.prepare(`
   INSERT INTO task_history (channel_id, prompt, status)
@@ -187,11 +188,6 @@ const stmtInsertTask = db.prepare(`
 const stmtCompleteTask = db.prepare(`
   UPDATE task_history SET status = ?, completed_at = datetime('now')
   WHERE id = ?
-`);
-
-const stmtLatestTask = db.prepare(`
-  SELECT * FROM task_history WHERE channel_id = ?
-  ORDER BY started_at DESC LIMIT 1
 `);
 
 const stmtTaskHistory = db.prepare(`
@@ -206,10 +202,6 @@ export function insertTask(channelId, prompt) {
 
 export function completeTask(taskId, status) {
   stmtCompleteTask.run(status, taskId);
-}
-
-export function getLatestTask(channelId) {
-  return stmtLatestTask.get(channelId) || null;
 }
 
 export function getTaskHistory(channelId, limit = 10) {
@@ -268,6 +260,15 @@ export function getTaskStats() {
 // ── Cleanup ─────────────────────────────────────────────────────────────────
 export function purgeExpiredGrants() {
   return deleteExpiredGrants().changes;
+}
+
+const stmtPruneOldTasks = db.prepare(
+  `DELETE FROM task_history WHERE started_at < datetime('now', '-90 days')`
+);
+
+/** Remove task_history entries older than 90 days. */
+export function pruneOldTasks() {
+  return stmtPruneOldTasks.run().changes;
 }
 
 let dbClosed = false;

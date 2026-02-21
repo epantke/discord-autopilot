@@ -57,9 +57,24 @@ function extractSubCommands(command) {
     result.push(part);
     const m = SUBSHELL_WRAPPER.exec(part);
     if (m) result.push(...m[1].split(COMPOUND_SPLIT).filter(Boolean));
-    // Also extract from $(...) command substitutions
-    const subst = part.matchAll(/\$\(([^)]+)\)/g);
-    for (const s of subst) result.push(...s[1].split(COMPOUND_SPLIT).filter(Boolean));
+    // Recursively extract from $(...) command substitutions (handles nesting)
+    let remaining = part;
+    let depth = 0;
+    let start = -1;
+    for (let i = 0; i < remaining.length - 1; i++) {
+      if (remaining[i] === "$" && remaining[i + 1] === "(") {
+        if (depth === 0) start = i + 2;
+        depth++;
+        i++; // skip '('
+      } else if (remaining[i] === ")" && depth > 0) {
+        depth--;
+        if (depth === 0 && start >= 0) {
+          const inner = remaining.slice(start, i);
+          result.push(...inner.split(COMPOUND_SPLIT).filter(Boolean));
+          start = -1;
+        }
+      }
+    }
     // Also extract from backtick substitutions
     const backtick = part.matchAll(/`([^`]+)`/g);
     for (const b of backtick) result.push(...b[1].split(COMPOUND_SPLIT).filter(Boolean));
@@ -183,13 +198,21 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
     }
 
     // Scan for ALL cd's into paths outside workspace
-    for (const cdMatch of cmd.matchAll(/\b(?:cd|pushd)\s+["']?([^\s"';&|]+)/g)) {
+    for (const cdMatch of cmd.matchAll(/\b(?:cd|pushd)\s+(?:--\s+)?["']?([^\s"';&|]+)/g)) {
       const rawTarget = cdMatch[1];
       // Block tilde expansion — shell expands ~ to home dir, bypassing resolve()
       if (rawTarget === "~" || rawTarget.startsWith("~/")) {
         return {
           decision: "deny",
           reason: `Shell cd with tilde expansion is not allowed: ${rawTarget}`,
+          gate: "outside",
+        };
+      }
+      // Block cd with shell variables — cannot statically resolve
+      if (rawTarget.startsWith("$") || rawTarget.includes("${")) {
+        return {
+          decision: "deny",
+          reason: `Shell cd with variable expansion is not allowed: ${rawTarget}`,
           gate: "outside",
         };
       }

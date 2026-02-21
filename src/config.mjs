@@ -24,11 +24,6 @@ const PROJECT_NAME = process.env.PROJECT_NAME || "default";
 const REPO_PATH = process.env.REPO_PATH || join(REPOS_ROOT, PROJECT_NAME);
 
 // ── Optional filters ────────────────────────────────────────────────────────
-function csvToSet(envVal) {
-  if (!envVal) return null;
-  return new Set(envVal.split(",").map((s) => s.trim()).filter(Boolean));
-}
-
 const ALLOWED_GUILDS = csvToValidatedSet(process.env.ALLOWED_GUILDS, "ALLOWED_GUILDS");
 const ALLOWED_CHANNELS = csvToValidatedSet(process.env.ALLOWED_CHANNELS, "ALLOWED_CHANNELS");
 const ADMIN_ROLE_IDS = csvToValidatedSet(process.env.ADMIN_ROLE_IDS, "ADMIN_ROLE_IDS");

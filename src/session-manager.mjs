@@ -1,16 +1,20 @@
-import { execSync, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH } from "./config.mjs";
+import { promisify } from "node:util";
+import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS } from "./config.mjs";
 import {
   upsertSession,
   getSession,
-  getAllSessions,
   updateSessionStatus,
   deleteSession as dbDeleteSession,
   insertTask,
   completeTask,
   getTaskHistory as dbGetTaskHistory,
+  addResponder as dbAddResponder,
+  removeResponder as dbRemoveResponder,
+  getResponders as dbGetResponders,
+  pruneOldTasks,
 } from "./state.mjs";
 import { createAgentSession } from "./copilot-client.mjs";
 import {
@@ -23,6 +27,7 @@ import { createPushApprovalRequest } from "./push-approval.mjs";
 import { redactSecrets } from "./secret-scanner.mjs";
 import { createLogger } from "./logger.mjs";
 
+const execFileAsync = promisify(execFile);
 const log = createLogger("session");
 
 /**
@@ -30,6 +35,12 @@ const log = createLogger("session");
  * @type {Map<string, SessionContext>}
  */
 const sessions = new Map();
+
+/**
+ * In-memory responder store per channel.
+ * Map< channelId, Set< userId > >
+ */
+const responderStore = new Map();
 
 /**
  * @typedef {object} SessionContext
@@ -47,7 +58,7 @@ const sessions = new Map();
 
 // ── Workspace Setup ─────────────────────────────────────────────────────────
 
-function createWorktree(channelId) {
+async function createWorktree(channelId) {
   const wsRoot = join(WORKSPACES_ROOT, PROJECT_NAME);
   mkdirSync(wsRoot, { recursive: true });
 
@@ -57,9 +68,10 @@ function createWorktree(channelId) {
     // Reuse existing worktree — read its actual branch
     let branch;
     try {
-      branch = execSync("git branch --show-current", {
-        cwd: worktreePath, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
-      }).trim();
+      const { stdout } = await execFileAsync("git", ["branch", "--show-current"], {
+        cwd: worktreePath, encoding: "utf-8", timeout: 5_000,
+      });
+      branch = stdout.trim();
     } catch {
       branch = `agent/${channelId.slice(-8)}-recovered`;
     }
@@ -70,18 +82,18 @@ function createWorktree(channelId) {
 
   try {
     // Create branch from HEAD
-    execFileSync("git", ["branch", branchName, "HEAD"], {
+    await execFileAsync("git", ["branch", branchName, "HEAD"], {
       cwd: REPO_PATH,
-      stdio: "pipe",
+      timeout: 10_000,
     });
   } catch {
     // Branch may already exist
   }
 
   try {
-    execFileSync("git", ["worktree", "add", worktreePath, branchName], {
+    await execFileAsync("git", ["worktree", "add", worktreePath, branchName], {
       cwd: REPO_PATH,
-      stdio: "pipe",
+      timeout: 30_000,
     });
   } catch (err) {
     // If worktree add fails, try with existing directory
@@ -113,7 +125,7 @@ export async function getOrCreateSession(channelId, channel) {
     workspacePath = dbRow.workspace_path;
     branch = dbRow.branch;
   } else {
-    const wt = createWorktree(channelId);
+    const wt = await createWorktree(channelId);
     workspacePath = wt.workspacePath;
     branch = wt.branch;
   }
@@ -177,17 +189,28 @@ export async function getOrCreateSession(channelId, channel) {
       const ctx = sessions.get(channelId);
       if (ctx) ctx.awaitingQuestion = true;
 
-      // Post question in Discord and wait for next message in channel
-      await channel.send(
+      // Post question in the output channel (thread) where the user sees output
+      const target = ctx?.output?.channel || channel;
+      await target.send(
         `❓ **Agent asks:**\n${question}` +
           (choices ? `\nOptions: ${choices.join(", ")}` : "")
       );
 
       try {
-        const collected = await channel.awaitMessages({
+        const collected = await target.awaitMessages({
           max: 1,
           time: 300_000, // 5 min
-          filter: (m) => !m.author.bot,
+          filter: (m) => {
+            if (m.author.bot) return false;
+            if (ADMIN_USER_ID && m.author.id === ADMIN_USER_ID) return true;
+            if (ADMIN_ROLE_IDS && m.member?.roles?.cache) {
+              if ([...ADMIN_ROLE_IDS].some((id) => m.member.roles.cache.has(id))) return true;
+            }
+            const responders = getChannelResponders(channelId);
+            if (responders.size > 0) return responders.has(m.author.id);
+            if (!ADMIN_ROLE_IDS) return true;
+            return false;
+          },
         });
         return collected.first()?.content || "No answer provided.";
       } catch {
@@ -228,6 +251,7 @@ export async function getOrCreateSession(channelId, channel) {
     currentPrompt: null,
     awaitingQuestion: false,
     _toolsCompleted: 0,
+    _lastActivity: Date.now(),
   };
 
   sessions.set(channelId, ctx);
@@ -238,8 +262,33 @@ export async function getOrCreateSession(channelId, channel) {
 
   // Restore grants from DB
   restoreGrants(channelId);
+  restoreResponders(channelId);
 
   return ctx;
+}
+
+// ── Responders (answer agent questions) ───────────────────────────────────
+
+function restoreResponders(channelId) {
+  const rows = dbGetResponders(channelId);
+  if (rows.length > 0) {
+    responderStore.set(channelId, new Set(rows.map((r) => r.user_id)));
+  }
+}
+
+export function addChannelResponder(channelId, userId) {
+  if (!responderStore.has(channelId)) responderStore.set(channelId, new Set());
+  responderStore.get(channelId).add(userId);
+  dbAddResponder(channelId, userId);
+}
+
+export function removeChannelResponder(channelId, userId) {
+  responderStore.get(channelId)?.delete(userId);
+  return dbRemoveResponder(channelId, userId);
+}
+
+export function getChannelResponders(channelId) {
+  return responderStore.get(channelId) || new Set();
 }
 
 // ── Task Execution ──────────────────────────────────────────────────────────
@@ -330,32 +379,18 @@ async function processQueue(channelId, channel) {
       updateSessionStatus(channelId, "idle");
       ctx.output?.finish(`❌ **Error:** ${redactSecrets(err.message).clean}`);
     }
+    err._reportedByOutput = true;
     reject(err);
   } finally {
     clearInterval(typingInterval);
     ctx.output = null;
     ctx.currentPrompt = null;
+    ctx._lastActivity = Date.now();
     // Continue queue unless paused (use setImmediate to avoid stack overflow)
     if (!ctx.paused) {
       setImmediate(() => processQueue(channelId, channel));
     }
   }
-}
-
-// ── Approve Push (for /approve_push command) ────────────────────────────────
-
-export async function approvePendingPush(channelId, channel) {
-  const ctx = sessions.get(channelId);
-  if (!ctx) return { found: false };
-
-  // The push approval is handled inline via the onPreToolUse hook promise.
-  // The /approve_push command is an alternative to the button.
-  // Since buttons are the primary mechanism, this command sends a note.
-  await channel.send(
-    "ℹ️ Use the **Approve Push** button on the push request message, " +
-      "or wait for the next push attempt."
-  );
-  return { found: true };
 }
 
 // ── Status ──────────────────────────────────────────────────────────────────
@@ -488,14 +523,21 @@ export function getTaskHistory(channelId, limit = 10) {
   return dbGetTaskHistory(channelId, limit);
 }
 
-// ── Restore all sessions on startup ─────────────────────────────────────────
-
-export function getStoredSessions() {
-  return getAllSessions();
-}
-
 export function getActiveSessionCount() {
   return sessions.size;
+}
+
+/**
+ * Update the branch for an active session (after /branch create or switch).
+ */
+export function updateBranch(channelId, newBranch) {
+  const ctx = sessions.get(channelId);
+  if (!ctx) return false;
+  ctx.branch = newBranch;
+  updateSessionStatus(channelId, ctx.status); // refresh DB row
+  // Also update the branch column directly
+  upsertSession(channelId, PROJECT_NAME, ctx.workspacePath, newBranch, ctx.status);
+  return true;
 }
 
 /**
@@ -507,3 +549,26 @@ export function isAwaitingQuestion(channelId) {
   const ctx = sessions.get(channelId);
   return ctx?.awaitingQuestion === true;
 }
+
+// ── Idle Session Sweep & Task Pruning ───────────────────────────────────────
+
+const IDLE_SWEEP_MS = 24 * 60 * 60_000; // 24 hours
+const _idleSweep = setInterval(() => {
+  const now = Date.now();
+  for (const [channelId, ctx] of sessions) {
+    if (ctx.status !== "idle") continue;
+    if (ctx.queue.length > 0) continue;
+    // Track last activity — fall back to creation time
+    const idle = now - (ctx._lastActivity || 0);
+    if (idle >= IDLE_SWEEP_MS) {
+      try { ctx.copilotSession.destroy(); } catch {}
+      revokeAllGrants(channelId);
+      sessions.delete(channelId);
+      log.info("Idle session swept", { channelId });
+    }
+  }
+  // Prune old task history
+  const pruned = pruneOldTasks();
+  if (pruned > 0) log.info("Pruned old tasks", { count: pruned });
+}, IDLE_SWEEP_MS);
+_idleSweep.unref();
