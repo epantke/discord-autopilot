@@ -101,21 +101,34 @@ Discord (slash commands, buttons, threads)
 
 ## Architecture
 
+**Repository layout:**
+
+```
+agent.sh                  # Deployment script (Linux / macOS)
+agent.ps1                 # Deployment script (Windows)
+build.mjs                 # Generates standalone scripts → dist/
+src/
+├── package.json          # Dependencies & npm scripts
+├── bot.mjs               # Discord client, slash commands, RBAC
+├── config.mjs            # ENV parsing, defaults
+├── state.mjs             # SQLite (WAL), migrations
+├── policy-engine.mjs     # Path security, push detection
+├── grants.mjs            # Grant CRUD, TTL, auto-revoke
+├── copilot-client.mjs    # SDK session factory
+├── session-manager.mjs   # Session lifecycle, task queue, worktrees
+├── discord-output.mjs    # Streaming, throttling, chunking
+├── push-approval.mjs     # Push gate, diff summary, buttons
+├── secret-scanner.mjs    # Token redaction (9 patterns)
+└── logger.mjs            # Structured JSON logging
+```
+
+**Runtime layout** (created by deployment scripts):
+
 ```
 ~/.local/share/discord-agent/
-├── app/                  # Bot runtime (deployed by agent.sh / agent.ps1)
+├── app/                  # Bot runtime (copied from src/)
 │   ├── src/
-│   │   ├── bot.mjs              # Discord client, slash commands, RBAC
-│   │   ├── config.mjs           # ENV parsing, defaults
-│   │   ├── state.mjs            # SQLite (WAL), migrations
-│   │   ├── policy-engine.mjs    # Path security, push detection
-│   │   ├── grants.mjs           # Grant CRUD, TTL, auto-revoke
-│   │   ├── copilot-client.mjs   # SDK session factory
-│   │   ├── session-manager.mjs  # Session lifecycle, task queue, worktrees
-│   │   ├── discord-output.mjs   # Streaming, throttling, chunking
-│   │   ├── push-approval.mjs    # Push gate, diff summary, buttons
-│   │   ├── secret-scanner.mjs   # Token redaction (9 patterns)
-│   │   └── logger.mjs           # Structured JSON logging
+│   │   └── *.mjs
 │   └── package.json
 ├── repos/<project>/      # Cloned repository
 ├── workspaces/<project>/ # Git worktrees (one per channel)
@@ -172,7 +185,7 @@ Discord (slash commands, buttons, threads)
 Generate standalone deployment scripts with all source files embedded inline (no `src/` directory needed):
 
 ```bash
-npm run build      # → dist/agent.sh, dist/agent.ps1
+node build.mjs     # → dist/agent.sh, dist/agent.ps1
 ```
 
 The generated scripts are fully self-contained — drop them on any machine and run.

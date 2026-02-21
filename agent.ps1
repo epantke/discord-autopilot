@@ -725,7 +725,7 @@ function Copy-Utf8File {
 }
 
 # Copy package.json
-Copy-Utf8File (Join-Path $ScriptDir 'package.json') (Join-Path $App 'package.json')
+Copy-Utf8File (Join-Path $ScriptDir 'src\package.json') (Join-Path $App 'package.json')
 Write-FileProgress 'package.json' 1 12
 
 # Copy all source files

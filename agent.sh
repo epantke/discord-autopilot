@@ -300,7 +300,7 @@ if [[ ! -d "$SRC_DIR" ]]; then
 fi
 
 mkdir -p "$APP/src"
-cp "$SCRIPT_DIR/package.json" "$APP/package.json"
+cp "$SCRIPT_DIR/src/package.json" "$APP/package.json"
 for f in "$SRC_DIR"/*.mjs; do
   cp "$f" "$APP/src/$(basename "$f")"
 done
@@ -334,5 +334,7 @@ echo ""
 
 export PROJECT_NAME
 export REPO_PATH="$REPO_DIR"
+export ADMIN_USER_ID="${ADMIN_USER_ID:-}"
+export STARTUP_CHANNEL_ID="${STARTUP_CHANNEL_ID:-}"
 
 exec node "$APP/src/bot.mjs"

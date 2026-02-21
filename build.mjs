@@ -22,8 +22,8 @@ function readNormalized(filePath) {
   return readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n");
 }
 
-const pkgJsonContent = readNormalized(join(__dirname, "package.json"));
 const srcDir = join(__dirname, "src");
+const pkgJsonContent = readNormalized(join(srcDir, "package.json"));
 const srcFiles = readdirSync(srcDir).filter((f) => f.endsWith(".mjs")).sort();
 
 const sources = [
