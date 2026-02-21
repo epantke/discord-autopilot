@@ -197,11 +197,11 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         fi
 
         if echo "$GH_SCOPES" | grep -qw "copilot"; then
-          ok "Scope: copilot (Copilot SDK)"
+          ok "Scope: copilot"
         else
-          warn "Scope: copilot MISSING — required for the Copilot SDK"
-          warn "  Edit your token: https://github.com/settings/tokens > copilot scope"
-          VALIDATION_FAILED=true
+          info "Scope: copilot not set (optional)"
+          info "  The Copilot SDK uses \`gh auth\` credentials, not the PAT."
+          info "  Ensure \`gh auth login\` has been run on this machine."
         fi
       else
         info "Scopes: n/a (fine-grained PAT)"
@@ -256,6 +256,21 @@ if git ls-remote --exit-code "$REPO_URL" HEAD >/dev/null 2>&1; then
 else
   warn "Git access: unreachable via git ls-remote. Clone step may fail."
   warn "  Check URL, SSH keys, or network connectivity."
+fi
+
+# GitHub CLI auth (required for Copilot SDK)
+if command -v gh >/dev/null 2>&1; then
+  if gh auth status >/dev/null 2>&1; then
+    ok "gh auth: authenticated"
+  else
+    warn "gh auth: not authenticated"
+    warn "  The Copilot SDK requires \`gh auth login\`. Run it before starting the bot."
+    VALIDATION_FAILED=true
+  fi
+else
+  warn "GitHub CLI (gh) not installed"
+  warn "  The Copilot SDK requires \`gh\`. Install it: https://cli.github.com/"
+  VALIDATION_FAILED=true
 fi
 
 if [[ "$VALIDATION_FAILED" == "true" ]]; then

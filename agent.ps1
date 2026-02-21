@@ -625,16 +625,15 @@ if ($ghToken) {
 
             $hasCopilot = $scopeList -contains 'copilot'
             if ($hasCopilot) {
-                Write-Check 'Scope: copilot' 'granted (Copilot SDK)' $true
+                Write-Check 'Scope: copilot' 'granted' $true
             } else {
-                Write-Check 'Scope: copilot' 'MISSING' $false
-                Write-Warn '  Required for the Copilot SDK to list models and create sessions.'
-                Write-Warn '  Edit your token: https://github.com/settings/tokens > copilot scope'
-                $script:validationOk = $false
+                Write-Check 'Scope: copilot' 'not set (optional)' $true
+                Write-Info '  The Copilot SDK uses `gh auth` credentials, not the PAT.'
+                Write-Info '  Ensure `gh auth login` has been run on this machine.'
             }
 
             # Show all scopes for transparency
-            if (-not $hasRepo -or -not $hasCopilot) {
+            if (-not $hasRepo) {
                 Write-Warn "  Current scopes: $scopes"
             }
         } else {
@@ -709,6 +708,22 @@ try {
 } catch {
     Write-Check 'Git Access' "error: $($_.Exception.Message)" $false
     Write-Warn '  git ls-remote failed. Clone step may fail.'
+}
+
+# ── GitHub CLI auth (required for Copilot SDK) ──
+if (Get-Command gh -ErrorAction SilentlyContinue) {
+    $ghAuthOut = & gh auth status 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) {
+        Write-Check 'gh auth' 'authenticated' $true
+    } else {
+        Write-Check 'gh auth' 'not authenticated' $false
+        Write-Warn '  The Copilot SDK requires `gh auth login`. Run it before starting the bot.'
+        $script:validationOk = $false
+    }
+} else {
+    Write-Check 'gh CLI' 'not installed' $false
+    Write-Warn '  The Copilot SDK requires GitHub CLI (`gh`). Install it: https://cli.github.com/'
+    $script:validationOk = $false
 }
 
 Write-Host "       $([char]0x2514)$(([string][char]0x2500) * 44)" -ForegroundColor DarkGray
