@@ -141,7 +141,7 @@ src/
 |----------|---------|-------------|
 | `DISCORD_TOKEN` | **required** | Discord bot token |
 | `REPO_URL` | _(prompted)_ | Repository to clone |
-| `GITHUB_TOKEN` | _(none)_ | For private repos / higher rate limits |
+| `GITHUB_TOKEN` | _(none)_ | Fine-grained PAT — permissions: Contents (r/w), Pull requests (r/w) |
 | `ALLOWED_GUILDS` | _(all)_ | Comma-separated guild IDs |
 | `ALLOWED_CHANNELS` | _(all)_ | Comma-separated channel IDs |
 | `ADMIN_ROLE_IDS` | _(all)_ | Comma-separated admin role IDs |

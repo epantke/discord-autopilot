@@ -197,7 +197,8 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
         fi
       else
         info "Scopes: n/a (fine-grained PAT)"
-        info "  Ensure token has Contents (read/write) and Pull Requests (read/write)."
+        info "  Ensure token has: Contents (read/write) + Pull requests (read/write)"
+        info "  and access to the target repository."
       fi
 
       # Check access to the specific repo

@@ -227,11 +227,16 @@ if (-not $cfgGH) {
     Write-Host ' GITHUB_TOKEN ' -ForegroundColor Black -BackgroundColor DarkGray -NoNewline
     Write-Host ' (optional)' -ForegroundColor DarkGray
     Write-Host ''
-    Write-Host '  Needed for private repos and higher API rate limits.' -ForegroundColor Gray
-    Write-Host '  Create one at: ' -ForegroundColor DarkGray -NoNewline
-    Write-Host 'https://github.com/settings/tokens' -ForegroundColor Cyan
-    Write-Host '  Required scopes: ' -ForegroundColor DarkGray -NoNewline
-    Write-Host 'repo' -ForegroundColor White
+    Write-Host '  Needed for private repos, pushing, and creating PRs.' -ForegroundColor Gray
+    Write-Host '  Create a fine-grained PAT: ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'https://github.com/settings/personal-access-tokens/new' -ForegroundColor Cyan
+    Write-Host '  Repository access: ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'Only select repositories' -ForegroundColor White -NoNewline
+    Write-Host ' (pick your target repo)' -ForegroundColor DarkGray
+    Write-Host '  Required permissions: ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'Contents (read/write)' -ForegroundColor White -NoNewline
+    Write-Host ', ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'Pull requests (read/write)' -ForegroundColor White
     Write-Host '  Press ' -ForegroundColor DarkGray -NoNewline
     Write-Host 'Enter' -ForegroundColor Yellow -NoNewline
     Write-Host ' to skip.' -ForegroundColor DarkGray
@@ -611,8 +616,8 @@ if ($ghToken) {
         } else {
             # Fine-grained PAT or no scopes returned
             Write-Check 'Scopes' 'n/a (fine-grained PAT)' $true
-            Write-Info '  Fine-grained PATs use repository permissions instead of scopes.'
-            Write-Info '  Ensure this token has Contents (read/write) and Pull Requests (read/write).'
+            Write-Info '  Ensure token has: Contents (read/write) + Pull requests (read/write)'
+            Write-Info '  and access to the target repository.'
         }
 
         # Check if token can access the specific repo
