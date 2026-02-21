@@ -216,6 +216,39 @@ export function getTaskHistory(channelId, limit = 10) {
   return stmtTaskHistory.all(channelId, limit);
 }
 
+// ── Stale state recovery ────────────────────────────────────────────────────
+const stmtStaleSessions = db.prepare(
+  `SELECT channel_id, project_name, branch FROM sessions WHERE status = 'working'`
+);
+
+const stmtStaleRunningTasks = db.prepare(
+  `SELECT id, channel_id, prompt, started_at FROM task_history WHERE status = 'running'`
+);
+
+const stmtMarkStaleTasksAborted = db.prepare(
+  `UPDATE task_history SET status = 'aborted', completed_at = datetime('now') WHERE status = 'running'`
+);
+
+const stmtResetStaleSessions = db.prepare(
+  `UPDATE sessions SET status = 'idle' WHERE status = 'working'`
+);
+
+export function getStaleSessions() {
+  return stmtStaleSessions.all();
+}
+
+export function getStaleRunningTasks() {
+  return stmtStaleRunningTasks.all();
+}
+
+export function markStaleTasksAborted() {
+  return stmtMarkStaleTasksAborted.run().changes;
+}
+
+export function resetStaleSessions() {
+  return stmtResetStaleSessions.run().changes;
+}
+
 // ── Stats ───────────────────────────────────────────────────────────────────
 
 const stmtTaskStats = db.prepare(`

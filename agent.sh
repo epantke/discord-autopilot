@@ -232,6 +232,7 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
 
     elif [[ "$GH_HTTP" == "401" ]]; then
       warn "GitHub token invalid (401). Create a new one: https://github.com/settings/tokens"
+      VALIDATION_FAILED=true
     else
       warn "GitHub API returned HTTP $GH_HTTP. Continuing..."
     fi

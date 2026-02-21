@@ -673,6 +673,7 @@ if ($ghToken) {
         if ($ghStatus -eq 401) {
             Write-Check 'GitHub Token' 'Invalid token (401 Unauthorized)' $false
             Write-Warn '  Create a new token: https://github.com/settings/tokens'
+            $script:validationOk = $false
         } else {
             $ghErr = $_.Exception.Message
             if ($ghErr.Length -gt 60) { $ghErr = $ghErr.Substring(0, 57) + '...' }

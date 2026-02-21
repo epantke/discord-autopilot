@@ -45,11 +45,20 @@ import {
 } from "./session-manager.mjs";
 
 import { addGrant, revokeGrant, startGrantCleanup, restoreGrants } from "./grants.mjs";
-import { closeDb, getAllSessions, getTaskStats } from "./state.mjs";
+import {
+  closeDb,
+  getAllSessions,
+  getTaskStats,
+  getStaleSessions,
+  getStaleRunningTasks,
+  markStaleTasksAborted,
+  resetStaleSessions,
+} from "./state.mjs";
 import { stopCopilotClient } from "./copilot-client.mjs";
 import { redactSecrets } from "./secret-scanner.mjs";
 import { createLogger } from "./logger.mjs";
 import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
 
 const log = createLogger("bot");
 
@@ -312,8 +321,12 @@ client.once(Events.ClientReady, async () => {
 
   log.info("Bot ready", { project: PROJECT_NAME });
 
+  // ── Environment Validation & Crash Recovery ─────────────────────────────
+  const envIssues = await validateEnvironment();
+  const recoveryInfo = await recoverFromPreviousErrors();
+
   // ── Startup Notification ────────────────────────────────────────────────
-  await sendStartupNotification();
+  await sendStartupNotification({ envIssues, recoveryInfo });
 
   // ── Bot Presence ────────────────────────────────────────────────────────
   client.user.setPresence({
@@ -323,15 +336,22 @@ client.once(Events.ClientReady, async () => {
 });
 
 /** Build the startup embed once and reuse for channel + DM. */
-function buildStartupEmbed() {
+function buildStartupEmbed({ envIssues, recoveryInfo } = {}) {
   let repoInfo = "unknown";
   try {
     repoInfo = execSync("git remote get-url origin", { cwd: REPO_PATH, encoding: "utf-8", timeout: 5_000 }).trim();
   } catch { /* ignore */ }
 
-  return new EmbedBuilder()
-    .setTitle("\u{1F7E2} Bot Online")
-    .setColor(0x2ecc71)
+  const hasErrors = envIssues?.errors?.length > 0;
+  const hasWarnings = envIssues?.warnings?.length > 0;
+  const hasRecovery = recoveryInfo && (recoveryInfo.recoveredSessions > 0 || recoveryInfo.abortedTasks.length > 0);
+
+  const color = hasErrors ? 0xff0000 : (hasWarnings || hasRecovery) ? 0xffa500 : 0x2ecc71;
+  const title = hasErrors ? "\u26A0\uFE0F Bot Online — Configuration Errors" : hasRecovery ? "\u{1F7E1} Bot Online — Recovered" : "\u{1F7E2} Bot Online";
+
+  const embed = new EmbedBuilder()
+    .setTitle(title)
+    .setColor(color)
     .setDescription(`**${client.user.tag}** is ready and listening.`)
     .addFields(
       { name: "Project", value: PROJECT_NAME, inline: true },
@@ -339,18 +359,184 @@ function buildStartupEmbed() {
       { name: "Repository", value: repoInfo, inline: false },
     )
     .setTimestamp();
+
+  if (hasErrors) {
+    embed.addFields({
+      name: "\u{1F534} Configuration Errors",
+      value: envIssues.errors.map((e) => `\u2022 ${e}`).join("\n").slice(0, 1024),
+      inline: false,
+    });
+  }
+
+  if (hasWarnings) {
+    embed.addFields({
+      name: "\u{1F7E1} Warnings",
+      value: envIssues.warnings.map((w) => `\u2022 ${w}`).join("\n").slice(0, 1024),
+      inline: false,
+    });
+  }
+
+  if (hasRecovery) {
+    const lines = [];
+    if (recoveryInfo.recoveredSessions > 0) {
+      lines.push(`${recoveryInfo.recoveredSessions} interrupted session(s) reset to idle`);
+    }
+    for (const t of recoveryInfo.abortedTasks.slice(0, 10)) {
+      const snippet = t.prompt_snippet.length > 80 ? t.prompt_snippet.slice(0, 80) + "\u2026" : t.prompt_snippet;
+      lines.push(`\u{1F6D1} Aborted: ${snippet}`);
+    }
+    if (recoveryInfo.abortedTasks.length > 10) {
+      lines.push(`\u2026 and ${recoveryInfo.abortedTasks.length - 10} more`);
+    }
+    embed.addFields({
+      name: "\u{1F504} Recovered from Previous Crash",
+      value: lines.join("\n").slice(0, 1024),
+      inline: false,
+    });
+  }
+
+  return embed;
 }
 
-async function sendStartupNotification() {
-  const embed = buildStartupEmbed();
+// ── Environment Validation ──────────────────────────────────────────────────
+
+async function validateEnvironment() {
+  const errors = [];
+  const warnings = [];
+
+  // Check STARTUP_CHANNEL_ID — does the channel still exist?
+  if (STARTUP_CHANNEL_ID) {
+    try {
+      const ch = await client.channels.fetch(STARTUP_CHANNEL_ID);
+      if (!ch?.isTextBased()) {
+        errors.push(`STARTUP_CHANNEL_ID (${STARTUP_CHANNEL_ID}) exists but is not a text channel.`);
+      }
+    } catch {
+      errors.push(`STARTUP_CHANNEL_ID (${STARTUP_CHANNEL_ID}) points to a deleted or inaccessible channel. Update it in your .env file.`);
+    }
+  }
+
+  // Check ADMIN_USER_ID — is the user reachable?
+  if (ADMIN_USER_ID) {
+    try {
+      await client.users.fetch(ADMIN_USER_ID);
+    } catch {
+      errors.push(`ADMIN_USER_ID (${ADMIN_USER_ID}) is invalid or the user cannot be found. Update it in your .env file.`);
+    }
+  }
+
+  // Check GITHUB_TOKEN — is it still valid?
+  if (process.env.GITHUB_TOKEN) {
+    try {
+      const resp = await fetch("https://api.github.com/user", {
+        headers: {
+          Authorization: `token ${process.env.GITHUB_TOKEN}`,
+          "User-Agent": "discord-copilot-agent/1.0",
+        },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (resp.status === 401) {
+        errors.push("GITHUB_TOKEN is expired or invalid (401). Generate a new one at https://github.com/settings/tokens");
+      } else if (resp.status === 403) {
+        warnings.push("GITHUB_TOKEN returned 403 (rate-limited or forbidden). The token may still work.");
+      } else if (!resp.ok) {
+        warnings.push(`GITHUB_TOKEN validation returned HTTP ${resp.status}. Might be a transient issue.`);
+      }
+    } catch (err) {
+      warnings.push(`Could not validate GITHUB_TOKEN (network error: ${err.message}). Continuing...`);
+    }
+  }
+
+  // Check REPO_PATH — does it exist and is it a git repo?
+  if (!existsSync(REPO_PATH)) {
+    warnings.push(`REPO_PATH (${REPO_PATH}) does not exist. Clone the repo or update the path.`);
+  } else if (!existsSync(`${REPO_PATH}/.git`) && !existsSync(`${REPO_PATH}/HEAD`)) {
+    warnings.push(`REPO_PATH (${REPO_PATH}) exists but does not appear to be a git repository.`);
+  }
+
+  // Check ALLOWED_GUILDS — are we actually in those guilds?
+  if (ALLOWED_GUILDS) {
+    for (const guildId of ALLOWED_GUILDS) {
+      if (!client.guilds.cache.has(guildId)) {
+        warnings.push(`ALLOWED_GUILDS contains ${guildId} but bot is not in that server.`);
+      }
+    }
+  }
+
+  if (errors.length > 0 || warnings.length > 0) {
+    log.warn("Environment validation issues", { errors, warnings });
+  } else {
+    log.info("Environment validation passed");
+  }
+
+  return { errors, warnings };
+}
+
+// ── Previous Crash Recovery ─────────────────────────────────────────────────
+
+async function recoverFromPreviousErrors() {
+  const staleSessions = getStaleSessions();
+  const staleTasks = getStaleRunningTasks();
+
+  if (staleSessions.length === 0 && staleTasks.length === 0) {
+    return null;
+  }
+
+  log.warn("Recovering from previous crash", {
+    staleSessions: staleSessions.length,
+    staleTasks: staleTasks.length,
+  });
+
+  const abortedTasks = staleTasks.map((t) => ({
+    channel_id: t.channel_id,
+    prompt_snippet: t.prompt.slice(0, 120),
+    task_id: t.id,
+  }));
+
+  const abortedCount = markStaleTasksAborted();
+  const resetCount = resetStaleSessions();
+
+  log.info("Recovery complete", { abortedTasks: abortedCount, resetSessions: resetCount });
+
+  // Notify affected channels (best-effort)
+  const notifiedChannels = new Set();
+  for (const task of abortedTasks) {
+    if (notifiedChannels.has(task.channel_id)) continue;
+    notifiedChannels.add(task.channel_id);
+    try {
+      const ch = await client.channels.fetch(task.channel_id);
+      if (ch?.isTextBased()) {
+        const snippet = task.prompt_snippet.length > 100 ? task.prompt_snippet.slice(0, 100) + "\u2026" : task.prompt_snippet;
+        const embed = new EmbedBuilder()
+          .setTitle("\u26A0\uFE0F Bot Restarted — Task Aborted")
+          .setColor(0xffa500)
+          .setDescription(`The bot was restarted and your running task was interrupted.\n\n**Aborted task:** ${snippet}\n\nYou can re-submit the task with \`/task\`.`)
+          .setTimestamp();
+        await ch.send({ embeds: [embed] });
+      }
+    } catch (err) {
+      log.warn("Failed to notify channel about aborted task", { channelId: task.channel_id, error: err.message });
+    }
+  }
+
+  return {
+    recoveredSessions: resetCount,
+    abortedTasks,
+  };
+}
+
+async function sendStartupNotification({ envIssues, recoveryInfo } = {}) {
+  const embed = buildStartupEmbed({ envIssues, recoveryInfo });
 
   // Channel notification
+  let channelSent = false;
   if (STARTUP_CHANNEL_ID) {
     try {
       const ch = await client.channels.fetch(STARTUP_CHANNEL_ID);
       if (ch?.isTextBased()) {
         await ch.send({ embeds: [embed] });
         log.info("Startup notification sent to channel", { channelId: STARTUP_CHANNEL_ID });
+        channelSent = true;
       } else {
         log.warn("STARTUP_CHANNEL_ID is not a text channel", { channelId: STARTUP_CHANNEL_ID });
       }
@@ -360,18 +546,20 @@ async function sendStartupNotification() {
   }
 
   // Admin DM notification
+  let adminSent = false;
   if (ADMIN_USER_ID) {
     try {
       const user = await client.users.fetch(ADMIN_USER_ID);
       await user.send({ embeds: [embed] });
       log.info("Startup DM sent to admin", { userId: ADMIN_USER_ID });
+      adminSent = true;
     } catch (err) {
       log.warn("Failed to send startup DM to admin", { userId: ADMIN_USER_ID, error: err.message });
     }
   }
 
-  // Fallback: if neither channel nor admin configured, post to first available text channel
-  if (!STARTUP_CHANNEL_ID && !ADMIN_USER_ID) {
+  // Fallback: if no notification was delivered, post to first available text channel
+  if (!channelSent && !adminSent) {
     try {
       const guild = client.guilds.cache.first();
       if (guild) {

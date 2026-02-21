@@ -29,9 +29,9 @@ function csvToSet(envVal) {
   return new Set(envVal.split(",").map((s) => s.trim()).filter(Boolean));
 }
 
-const ALLOWED_GUILDS = csvToSet(process.env.ALLOWED_GUILDS);
-const ALLOWED_CHANNELS = csvToSet(process.env.ALLOWED_CHANNELS);
-const ADMIN_ROLE_IDS = csvToSet(process.env.ADMIN_ROLE_IDS);
+const ALLOWED_GUILDS = csvToValidatedSet(process.env.ALLOWED_GUILDS, "ALLOWED_GUILDS") ?? csvToSet(process.env.ALLOWED_GUILDS);
+const ALLOWED_CHANNELS = csvToValidatedSet(process.env.ALLOWED_CHANNELS, "ALLOWED_CHANNELS") ?? csvToSet(process.env.ALLOWED_CHANNELS);
+const ADMIN_ROLE_IDS = csvToValidatedSet(process.env.ADMIN_ROLE_IDS, "ADMIN_ROLE_IDS") ?? csvToSet(process.env.ADMIN_ROLE_IDS);
 
 // ── Tunables ────────────────────────────────────────────────────────────────
 function safeInt(envVal, fallback) {
@@ -54,9 +54,28 @@ const RATE_LIMIT_MAX = safeInt(
   process.env.RATE_LIMIT_MAX, 10
 );
 
+// ── Snowflake ID validation ──────────────────────────────────────────────────
+function validateSnowflake(val, name) {
+  if (!val) return null;
+  if (/^\d{17,20}$/.test(val)) return val;
+  log.warn(`Invalid Snowflake ID for ${name}, ignoring`, { value: val });
+  return null;
+}
+
+function csvToValidatedSet(envVal, name) {
+  if (!envVal) return null;
+  const ids = envVal.split(",").map((s) => s.trim()).filter(Boolean);
+  const valid = ids.filter((id) => {
+    if (/^\d{17,20}$/.test(id)) return true;
+    log.warn(`Invalid Snowflake ID in ${name}, skipping`, { value: id });
+    return false;
+  });
+  return valid.length > 0 ? new Set(valid) : null;
+}
+
 // ── Startup Notifications ───────────────────────────────────────────────────
-const STARTUP_CHANNEL_ID = process.env.STARTUP_CHANNEL_ID || null;
-const ADMIN_USER_ID = process.env.ADMIN_USER_ID || null;
+const STARTUP_CHANNEL_ID = validateSnowflake(process.env.STARTUP_CHANNEL_ID, "STARTUP_CHANNEL_ID");
+const ADMIN_USER_ID = validateSnowflake(process.env.ADMIN_USER_ID, "ADMIN_USER_ID");
 
 // ── Limits ──────────────────────────────────────────────────────────────────
 const MAX_QUEUE_SIZE = safeInt(process.env.MAX_QUEUE_SIZE, 50);
