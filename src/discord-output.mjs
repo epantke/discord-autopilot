@@ -21,6 +21,7 @@ export class DiscordOutput {
     this.finished = false;
     this._flushing = false;
     this._flushQueued = false;
+    this._statusFooter = "";
   }
 
   /**
@@ -34,25 +35,14 @@ export class DiscordOutput {
   }
 
   /**
-   * Post a standalone status line (e.g. tool execution info).
+   * Set a transient status footer (replaces previous, not appended).
+   * Shown below the content in Discord; cleared on finish().
    */
-  async status(text) {
+  status(text) {
     if (this.finished) return;
-    try {
-      if (this.content.length + text.length + 2 < 1900) {
-        this.content += `\n${text}`;
-        this.dirty = true;
-        this._scheduleEdit();
-        return;
-      }
-      // Current message full — finalize it, start fresh
-      await this.flush();
-      this.content = text;
-      this.dirty = true;
-      this._scheduleEdit();
-    } catch {
-      // Swallow Discord errors — don't crash the agent
-    }
+    this._statusFooter = text;
+    this.dirty = true;
+    this._scheduleEdit();
   }
 
   /**
@@ -60,6 +50,7 @@ export class DiscordOutput {
    */
   async finish(epilogue = "") {
     this.finished = true;
+    this._statusFooter = "";
     if (this.editTimer) {
       clearTimeout(this.editTimer);
       this.editTimer = null;
@@ -88,7 +79,9 @@ export class DiscordOutput {
     this.dirty = false;
 
     try {
-      // If content exceeds threshold and we're still streaming, split into a new message
+      const footer = this._statusFooter ? `\n${this._statusFooter}` : "";
+
+      // If permanent content exceeds threshold, split (footer stays with remainder)
       if (this.content.length > MESSAGE_SPLIT_THRESHOLD && !this.finished) {
         const splitAt = this._findSplitPoint(this.content, MESSAGE_SPLIT_THRESHOLD);
         const head = redactSecrets(this.content.slice(0, splitAt)).clean;
@@ -102,11 +95,12 @@ export class DiscordOutput {
         // Start a new message for the remainder
         this.message = null;
         this.content = tail;
-        this.dirty = tail.length > 0;
+        this.dirty = tail.length > 0 || footer.length > 0;
         return;
       }
 
-      const cleaned = redactSecrets(this.content).clean;
+      const displayText = this.content + footer;
+      const cleaned = redactSecrets(displayText).clean;
       if (!cleaned) return;
 
       if (cleaned.length <= 1990) {
@@ -120,18 +114,21 @@ export class DiscordOutput {
         await this._sendAsAttachment(cleaned);
         this.message = null;
         this.content = "";
+        this._statusFooter = "";
       }
     } catch (err) {
       // If edit fails (message deleted etc.), try a new message
       if (err.code === 10008 || err.code === 50005) {
         this.message = null;
         try {
-          const cleaned = redactSecrets(this.content).clean;
+          const footer = this._statusFooter ? `\n${this._statusFooter}` : "";
+          const cleaned = redactSecrets(this.content + footer).clean;
           if (cleaned && cleaned.length <= 1990) {
             this.message = await this.channel.send(cleaned);
           } else if (cleaned) {
             await this._sendAsAttachment(cleaned);
             this.content = "";
+            this._statusFooter = "";
           }
         } catch {
           // Give up silently

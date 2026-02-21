@@ -146,13 +146,22 @@ export async function getOrCreateSession(channelId, channel) {
 
     onToolStart: (toolName) => {
       const ctx = sessions.get(channelId);
-      ctx?.output?.status(`🔧 \`${toolName}\`…`);
+      if (!ctx) return;
+      const count = ctx._toolsCompleted || 0;
+      const suffix = count > 0 ? `  · ${count} done` : "";
+      ctx.output?.status(`🔧 \`${toolName}\`…${suffix}`);
     },
 
     onToolComplete: (toolName, success, error) => {
       const ctx = sessions.get(channelId);
+      if (!ctx) return;
+      ctx._toolsCompleted = (ctx._toolsCompleted || 0) + 1;
+      if (!success && error) {
+        ctx.output?.append(`\n❌ \`${toolName}\`: ${error}\n`);
+      }
+      const count = ctx._toolsCompleted;
       const icon = success ? "✅" : "❌";
-      ctx?.output?.status(`${icon} \`${toolName}\`${error ? `: ${error}` : ""}`);
+      ctx.output?.status(`${icon} \`${toolName}\`  · ${count} tool${count !== 1 ? "s" : ""} done`);
     },
 
     onIdle: () => {
@@ -218,6 +227,7 @@ export async function getOrCreateSession(channelId, channel) {
     _aborted: false,
     currentPrompt: null,
     awaitingQuestion: false,
+    _toolsCompleted: 0,
   };
 
   sessions.set(channelId, ctx);
@@ -274,6 +284,7 @@ async function processQueue(channelId, channel) {
 
   ctx.status = "working";
   ctx.currentPrompt = prompt;
+  ctx._toolsCompleted = 0;
   updateSessionStatus(channelId, "working");
   ctx.output = new DiscordOutput(outputChannel);
   ctx.taskId = insertTask(channelId, prompt);

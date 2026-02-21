@@ -163,6 +163,8 @@ export async function createAgentSession(opts) {
   });
 
   // Wire up streaming events
+  let _lastToolName = "tool";
+
   if (onDelta) {
     session.on("assistant.message_delta", (event) => {
       onDelta(event.data?.deltaContent || "");
@@ -171,14 +173,16 @@ export async function createAgentSession(opts) {
 
   if (onToolStart) {
     session.on("tool.execution_start", (event) => {
-      onToolStart(event.data?.toolName || "unknown");
+      _lastToolName = event.data?.toolName || "unknown";
+      onToolStart(_lastToolName);
     });
   }
 
   if (onToolComplete) {
     session.on("tool.execution_complete", (event) => {
+      const toolName = event.data?.toolName || _lastToolName;
       onToolComplete(
-        event.data?.toolName || "unknown",
+        toolName,
         event.data?.success ?? true,
         event.data?.error
       );
