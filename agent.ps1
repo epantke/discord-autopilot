@@ -1161,12 +1161,13 @@ export async function executePush(channel, workspacePath, command) {
 
 $script:fileNum++; Write-FileProgress 'src/copilot-client.mjs' $script:fileNum 12
 Write-Utf8File (Join-Path $App 'src\copilot-client.mjs') @'
-import { CopilotClient, approveAll } from "@github/copilot-sdk";
+import { CopilotClient } from "@github/copilot-sdk";
 import { evaluateToolUse } from "./policy-engine.mjs";
 import { getActiveGrants } from "./grants.mjs";
 import { createLogger } from "./logger.mjs";
 
 const log = createLogger("copilot");
+const approveAll = () => ({ kind: "approved" });
 let client = null;
 
 export function getCopilotClient() {
