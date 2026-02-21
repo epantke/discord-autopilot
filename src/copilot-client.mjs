@@ -14,10 +14,14 @@ let client = null;
  */
 export function getCopilotClient() {
   if (!client) {
-    client = new CopilotClient({
+    const opts = {
       useStdio: true,
       autoRestart: true,
-    });
+    };
+    if (process.env.GITHUB_TOKEN) {
+      opts.githubToken = process.env.GITHUB_TOKEN;
+    }
+    client = new CopilotClient(opts);
   }
   return client;
 }
