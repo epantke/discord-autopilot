@@ -11,23 +11,57 @@ $ErrorActionPreference = 'Stop'
 
 # ── Output helpers ───────────────────────────────────────────────────────────
 
-function Write-Info  { param([string]$Msg) Write-Host "  $([char]0x25B8) $Msg" -ForegroundColor Cyan }
-function Write-Ok    { param([string]$Msg) Write-Host "  $([char]0x2714) $Msg" -ForegroundColor Green }
-function Write-Warn  { param([string]$Msg) Write-Host "  $([char]0x26A0) $Msg" -ForegroundColor Yellow }
+$script:StartTime = Get-Date
+
+function Write-Info  { param([string]$Msg) Write-Host "  $([char]0x25B8) " -ForegroundColor DarkCyan -NoNewline; Write-Host $Msg -ForegroundColor Cyan }
+function Write-Ok    { param([string]$Msg) Write-Host "  $([char]0x2714) " -ForegroundColor Green -NoNewline; Write-Host $Msg -ForegroundColor White }
+function Write-Warn  { param([string]$Msg) Write-Host "  $([char]0x26A0) " -ForegroundColor Yellow -NoNewline; Write-Host $Msg -ForegroundColor Yellow }
 function Write-Fatal {
     param([string]$Msg)
-    Write-Host "  $([char]0x2718) $Msg" -ForegroundColor Red
+    Write-Host ''
+    Write-Host "  $([char]0x2718) FATAL: " -ForegroundColor Red -NoNewline
+    Write-Host $Msg -ForegroundColor White
+    Write-Host ''
     exit 1
 }
 function Write-Step {
     param([int]$Num, [int]$Total, [string]$Title)
+    $elapsed = '{0:mm\:ss}' -f ((Get-Date) - $script:StartTime)
     Write-Host ''
-    $bar = ([string][char]0x2500) * (48 - $Title.Length)
-    Write-Host "  [$Num/$Total] $([char]0x25C6) $Title $bar" -ForegroundColor White
+    $padTitle = $Title.PadRight(36)
+    $numTag   = "$Num/$Total"
+    Write-Host '  ' -NoNewline
+    Write-Host " $numTag " -ForegroundColor Black -BackgroundColor DarkCyan -NoNewline
+    Write-Host " $padTitle" -ForegroundColor White -NoNewline
+    Write-Host " $([char]0x23F1) $elapsed" -ForegroundColor DarkGray
+    # progress dots
+    Write-Host '       ' -NoNewline
+    for ($i = 1; $i -le $Total; $i++) {
+        if ($i -lt $Num)  { Write-Host "$([char]0x2501)" -ForegroundColor Green -NoNewline }
+        elseif ($i -eq $Num) { Write-Host "$([char]0x25C9)" -ForegroundColor Cyan -NoNewline }
+        else              { Write-Host "$([char]0x2501)" -ForegroundColor DarkGray -NoNewline }
+    }
+    Write-Host ''
 }
-function Write-FileWrite {
-    param([string]$Name)
-    Write-Host "       $([char]0x2502) $([char]0x25CB) $Name" -ForegroundColor DarkGray
+function Write-FileProgress {
+    param([string]$Name, [int]$Current, [int]$Total)
+    $pct  = [math]::Round(($Current / $Total) * 100)
+    $fill = [math]::Round(($Current / $Total) * 20)
+    $bar  = ([string][char]0x2588) * $fill + ([string][char]0x2591) * (20 - $fill)
+    Write-Host "       $([char]0x2502) " -ForegroundColor DarkGray -NoNewline
+    Write-Host "$bar" -ForegroundColor Cyan -NoNewline
+    Write-Host " $pct% " -ForegroundColor DarkGray -NoNewline
+    Write-Host $Name -ForegroundColor White
+}
+function Write-Check {
+    param([string]$Label, [string]$Value, [bool]$Ok = $true)
+    if ($Ok) {
+        Write-Host "       $([char]0x2502) $([char]0x2714) " -ForegroundColor Green -NoNewline
+    } else {
+        Write-Host "       $([char]0x2502) $([char]0x2718) " -ForegroundColor Red -NoNewline
+    }
+    Write-Host ($Label.PadRight(14)) -ForegroundColor Gray -NoNewline
+    Write-Host $Value -ForegroundColor White
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -51,14 +85,20 @@ if (Test-Path $EnvFile) {
 }
 
 Write-Host ''
-Write-Host ''
-Write-Host "    $([char]0x2584)$([char]0x2584)$([char]0x2584)" -ForegroundColor Magenta -NoNewline
-Write-Host '  Discord ' -ForegroundColor White -NoNewline
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+Write-Host '   ___  _                       _' -ForegroundColor Magenta
+Write-Host '  |   \(_)___ __ ___ _ _ __| |' -ForegroundColor Magenta
+Write-Host '  | |) | (_-</ _/ _ \ ''_/ _` |' -ForegroundColor Magenta
+Write-Host '  |___/|_/__/\__\___/_| \__,_|' -ForegroundColor Magenta
+Write-Host '         ' -NoNewline
 Write-Host ([char]0x00D7) -ForegroundColor DarkGray -NoNewline
-Write-Host ' Copilot' -ForegroundColor White
-Write-Host "    $([char]0x2580)$([char]0x2580)$([char]0x2580)" -ForegroundColor Magenta -NoNewline
-Write-Host '  Autonomous Remote Coding Agent' -ForegroundColor DarkGray
-Write-Host ('    ' + ([string][char]0x2500) * 46) -ForegroundColor DarkGray
+Write-Host ' C o p i l o t' -ForegroundColor Cyan
+Write-Host ''
+Write-Host ('    ' + ([string][char]0x2550) * 46) -ForegroundColor DarkGray
+Write-Host '    Autonomous Remote Coding Agent' -ForegroundColor DarkGray -NoNewline
+Write-Host '   v1.0' -ForegroundColor DarkCyan
+Write-Host ('    ' + ([string][char]0x2550) * 46) -ForegroundColor DarkGray
 Write-Host ''
 
 $RepoUrl = $env:REPO_URL
@@ -70,6 +110,7 @@ if ($RepoUrl) {
 }
 
 if (-not $RepoUrl) { Write-Fatal 'No repo URL provided.' }
+Write-Host ''
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 2) Prerequisite checks
@@ -79,9 +120,13 @@ Write-Step 1 6 'Prerequisites'
 
 $Missing = @()
 
-if (-not (Get-Command git -ErrorAction SilentlyContinue))  { $Missing += 'git   -> https://git-scm.com/downloads' }
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) { $Missing += 'node  -> https://nodejs.org/ (>= 18)' }
-if (-not (Get-Command npm -ErrorAction SilentlyContinue))  { $Missing += 'npm   -> ships with node' }
+$hasGit  = [bool](Get-Command git -ErrorAction SilentlyContinue)
+$hasNode = [bool](Get-Command node -ErrorAction SilentlyContinue)
+$hasNpm  = [bool](Get-Command npm -ErrorAction SilentlyContinue)
+
+if (-not $hasGit)  { $Missing += 'git   -> https://git-scm.com/downloads' }
+if (-not $hasNode) { $Missing += 'node  -> https://nodejs.org/ (>= 18)' }
+if (-not $hasNpm)  { $Missing += 'npm   -> ships with node' }
 
 # Copilot CLI: accept 'copilot' binary OR 'gh copilot' extension
 $CopilotCmd = ''
@@ -94,6 +139,18 @@ if (-not $CopilotCmd) {
     $Missing += 'copilot -> npm install -g @githubnext/github-copilot-cli  OR  gh extension install github/gh-copilot'
 }
 
+$gitVer  = if ($hasGit)  { (git --version) -replace 'git version ','' } else { 'missing' }
+$nodeVer = if ($hasNode) { (node -v) } else { 'missing' }
+$npmVer  = if ($hasNpm)  { (npm -v) } else { 'missing' }
+$copVer  = if ($CopilotCmd) { $CopilotCmd } else { 'missing' }
+
+Write-Host "       $([char]0x250C)$(([string][char]0x2500) * 40)" -ForegroundColor DarkGray
+Write-Check 'git'     $gitVer   $hasGit
+Write-Check 'node'    $nodeVer  $hasNode
+Write-Check 'npm'     $npmVer   $hasNpm
+Write-Check 'copilot' $copVer   ([bool]$CopilotCmd)
+Write-Host "       $([char]0x2514)$(([string][char]0x2500) * 40)" -ForegroundColor DarkGray
+
 if ($Missing.Count -gt 0) {
     Write-Host ''
     $list = ($Missing | ForEach-Object { "  * $_" }) -join "`n"
@@ -105,7 +162,7 @@ $NodeMajor = [int](node -e "process.stdout.write(String(process.versions.node.sp
 if ($NodeMajor -lt 18) {
     Write-Fatal "Node.js >= 18 required (found v$(node -v)). Update: https://nodejs.org/"
 }
-Write-Ok "node $(node -v)"
+Write-Ok "All prerequisites satisfied"
 
 # Copilot auth check
 if ($CopilotCmd) {
@@ -198,10 +255,11 @@ function Write-Utf8File {
     if (-not (Test-Path $parentDir)) { New-Item -ItemType Directory -Path $parentDir -Force | Out-Null }
     [System.IO.File]::WriteAllText($Path, $Content, (New-Object System.Text.UTF8Encoding $false))
 }
+$script:fileNum = 0
 
 # ── package.json ─────────────────────────────────────────────────────────────
 
-Write-FileWrite 'package.json'
+$script:fileNum++; Write-FileProgress 'package.json' $script:fileNum 12
 Write-Utf8File (Join-Path $App 'package.json') @'
 {
   "name": "discord-copilot-agent",
@@ -221,7 +279,7 @@ Write-Utf8File (Join-Path $App 'package.json') @'
 
 # ── src/logger.mjs ──────────────────────────────────────────────────────────
 
-Write-FileWrite 'src/logger.mjs'
+$script:fileNum++; Write-FileProgress 'src/logger.mjs' $script:fileNum 12
 Write-Utf8File (Join-Path $App 'src\logger.mjs') @'
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.toLowerCase()] ?? LOG_LEVELS.info;
@@ -255,7 +313,7 @@ export function createLogger(component) {
 
 # ── src/secret-scanner.mjs ──────────────────────────────────────────────────
 
-Write-FileWrite 'src/secret-scanner.mjs'
+$script:fileNum++; Write-FileProgress 'src/secret-scanner.mjs' $script:fileNum 12
 Write-Utf8File (Join-Path $App 'src\secret-scanner.mjs') @'
 import { createLogger } from "./logger.mjs";
 
@@ -313,7 +371,7 @@ export function redactSecrets(text) {
 
 # ── src/config.mjs ──────────────────────────────────────────────────────────
 
-Write-FileWrite 'src/config.mjs'
+$script:fileNum++; Write-FileProgress 'src/config.mjs' $script:fileNum 12
 Write-Utf8File (Join-Path $App 'src\config.mjs') @'
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -388,7 +446,7 @@ export {
 
 # ── src/state.mjs ───────────────────────────────────────────────────────────
 
-Write-FileWrite 'src/state.mjs'
+$script:fileNum++; Write-FileProgress 'src/state.mjs' $script:fileNum 12
 Write-Utf8File (Join-Path $App 'src\state.mjs') @'
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
@@ -533,7 +591,7 @@ export function closeDb() {
 
 # ── src/policy-engine.mjs ───────────────────────────────────────────────────
 
-Write-FileWrite 'src/policy-engine.mjs'
+$script:fileNum++; Write-FileProgress 'src/policy-engine.mjs' $script:fileNum 12
 Write-Utf8File (Join-Path $App 'src\policy-engine.mjs') @'
 import { realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
@@ -636,7 +694,7 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
 
 # ── src/grants.mjs ──────────────────────────────────────────────────────────
 
-Write-FileWrite 'src/grants.mjs'
+$script:fileNum++; Write-FileProgress 'src/grants.mjs' $script:fileNum 12
 Write-Utf8File (Join-Path $App 'src\grants.mjs') @'
 import { DEFAULT_GRANT_MODE, DEFAULT_GRANT_TTL_MIN } from "./config.mjs";
 import {
@@ -717,7 +775,7 @@ export function startGrantCleanup(intervalMs = 60_000) {
 
 # ── src/discord-output.mjs ──────────────────────────────────────────────────
 
-Write-FileWrite 'src/discord-output.mjs'
+$script:fileNum++; Write-FileProgress 'src/discord-output.mjs' $script:fileNum 12
 Write-Utf8File (Join-Path $App 'src\discord-output.mjs') @'
 import { DISCORD_EDIT_THROTTLE_MS } from "./config.mjs";
 import { AttachmentBuilder } from "discord.js";
@@ -817,7 +875,7 @@ export class DiscordOutput {
 
 # ── src/push-approval.mjs ───────────────────────────────────────────────────
 
-Write-FileWrite 'src/push-approval.mjs'
+$script:fileNum++; Write-FileProgress 'src/push-approval.mjs' $script:fileNum 12
 Write-Utf8File (Join-Path $App 'src\push-approval.mjs') @'
 import {
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
@@ -953,7 +1011,7 @@ export async function executePush(channel, workspacePath, command) {
 
 # ── src/copilot-client.mjs ──────────────────────────────────────────────────
 
-Write-FileWrite 'src/copilot-client.mjs'
+$script:fileNum++; Write-FileProgress 'src/copilot-client.mjs' $script:fileNum 12
 Write-Utf8File (Join-Path $App 'src\copilot-client.mjs') @'
 import { CopilotClient, approveAll } from "@github/copilot-sdk";
 import { evaluateToolUse } from "./policy-engine.mjs";
@@ -1063,7 +1121,7 @@ export async function stopCopilotClient() {
 
 # ── src/session-manager.mjs ─────────────────────────────────────────────────
 
-Write-FileWrite 'src/session-manager.mjs'
+$script:fileNum++; Write-FileProgress 'src/session-manager.mjs' $script:fileNum 12
 Write-Utf8File (Join-Path $App 'src\session-manager.mjs') @'
 import { execSync } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
@@ -1308,7 +1366,7 @@ export function getStoredSessions() { return getAllSessions(); }
 
 # ── src/bot.mjs ──────────────────────────────────────────────────────────────
 
-Write-FileWrite 'src/bot.mjs'
+$script:fileNum++; Write-FileProgress 'src/bot.mjs' $script:fileNum 12
 Write-Utf8File (Join-Path $App 'src\bot.mjs') @'
 import {
   Client, GatewayIntentBits, REST, Routes,
@@ -1688,7 +1746,7 @@ client.login(DISCORD_TOKEN).catch((err) => {
 });
 '@
 
-Write-Ok '12 files written'
+Write-Ok '12 source files written'
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 6) Install dependencies
@@ -1696,7 +1754,7 @@ Write-Ok '12 files written'
 
 Write-Step 5 6 'Dependencies'
 
-Write-Info 'Running npm install...'
+Write-Info 'Running npm install ...'
 Push-Location $App
 try {
     if (Test-Path 'package-lock.json') {
@@ -1704,7 +1762,8 @@ try {
     } else {
         npm install --loglevel=warn
     }
-    Write-Ok 'Dependencies installed (discord.js, copilot-sdk, better-sqlite3)'
+    $pkgCount = (Get-ChildItem (Join-Path $App 'node_modules') -Directory -ErrorAction SilentlyContinue).Count
+    Write-Ok "$pkgCount packages installed"
 } finally {
     Pop-Location
 }
@@ -1715,18 +1774,37 @@ try {
 
 Write-Step 6 6 'Launch'
 
+$elapsed = '{0:mm\:ss}' -f ((Get-Date) - $script:StartTime)
+
+# ── Summary ──
 Write-Host ''
-Write-Host "    $([char]0x2554)$(([string][char]0x2550) * 48)$([char]0x2557)" -ForegroundColor Green
-Write-Host "    $([char]0x2551)  $([char]0x25BA) Bot starting " -ForegroundColor Green -NoNewline
-Write-Host '— press Ctrl+C to stop' -ForegroundColor DarkGray -NoNewline
-Write-Host "           $([char]0x2551)" -ForegroundColor Green
-Write-Host "    $([char]0x2551)    Project:  " -ForegroundColor Green -NoNewline
-Write-Host ($ProjectName.PadRight(36)) -ForegroundColor White -NoNewline
-Write-Host "$([char]0x2551)" -ForegroundColor Green
-Write-Host "    $([char]0x2551)    Branch:   " -ForegroundColor Green -NoNewline
-Write-Host ('main'.PadRight(36)) -ForegroundColor White -NoNewline
-Write-Host "$([char]0x2551)" -ForegroundColor Green
-Write-Host "    $([char]0x255A)$(([string][char]0x2550) * 48)$([char]0x255D)" -ForegroundColor Green
+$hl = ([string][char]0x2550) * 48
+Write-Host "    $([char]0x2554)$hl$([char]0x2557)" -ForegroundColor DarkCyan
+Write-Host "    $([char]0x2551)" -ForegroundColor DarkCyan -NoNewline
+Write-Host '  Setup complete ' -ForegroundColor Green -NoNewline
+Write-Host "$([char]0x2714)" -ForegroundColor Green -NoNewline
+Write-Host "                               $([char]0x2551)" -ForegroundColor DarkCyan
+Write-Host "    $([char]0x2560)$(([string][char]0x2500) * 48)$([char]0x2563)" -ForegroundColor DarkCyan
+@(
+    @('  Project:',  $ProjectName),
+    @('  Repo:',     (Split-Path $RepoDir -Leaf)),
+    @('  Runtime:',  "Node.js $(node -v)"),
+    @('  Elapsed:',  $elapsed)
+) | ForEach-Object {
+    Write-Host "    $([char]0x2551)" -ForegroundColor DarkCyan -NoNewline
+    Write-Host ("$($_[0])".PadRight(13)) -ForegroundColor Gray -NoNewline
+    Write-Host ("$($_[1])".PadRight(35)) -ForegroundColor White -NoNewline
+    Write-Host "$([char]0x2551)" -ForegroundColor DarkCyan
+}
+Write-Host "    $([char]0x255A)$hl$([char]0x255D)" -ForegroundColor DarkCyan
+Write-Host ''
+
+# ── Go ──
+Write-Host '    ' -NoNewline
+Write-Host ' $([char]0x25BA) STARTING BOT ' -ForegroundColor Black -BackgroundColor Green -NoNewline
+Write-Host '  press ' -ForegroundColor DarkGray -NoNewline
+Write-Host 'Ctrl+C' -ForegroundColor Yellow -NoNewline
+Write-Host ' to stop' -ForegroundColor DarkGray
 Write-Host ''
 
 $env:PROJECT_NAME = $ProjectName
