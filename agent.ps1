@@ -104,8 +104,36 @@ Write-Host ('    ' + ([string][char]0x2550) * 46) -ForegroundColor DarkGray
 
 $script:EnvChanged = $false   # track whether we need to offer .env save
 
+# Clipboard helper — reads from Windows clipboard if available
+function Get-ClipboardText {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        $text = [System.Windows.Forms.Clipboard]::GetText()
+        if ($text) { return $text.Trim() }
+    } catch {}
+    return $null
+}
+
 function Read-SecureInput {
-    param([string]$Prompt)
+    param([string]$Prompt, [switch]$OfferClipboard)
+    if ($OfferClipboard) {
+        $clip = Get-ClipboardText
+        if ($clip -and $clip.Length -ge 8) {
+            $preview = $clip.Substring(0, [Math]::Min(6, $clip.Length)) + '...' + $clip.Substring([Math]::Max(0, $clip.Length - 4))
+            Write-Host "  $([char]0x25B8) " -ForegroundColor DarkCyan -NoNewline
+            Write-Host "Clipboard detected: " -ForegroundColor DarkGray -NoNewline
+            Write-Host $preview -ForegroundColor Yellow
+            Write-Host "  $([char]0x25B8) " -ForegroundColor DarkCyan -NoNewline
+            $useClip = Read-Host 'Use clipboard value? [Y/n]'
+            if ($useClip -eq '' -or $useClip -match '^[yYjJ]') {
+                return $clip
+            }
+        }
+    }
+    Write-Host ''
+    Write-Host '  Tip: ' -ForegroundColor DarkGray -NoNewline
+    Write-Host 'Right-click' -ForegroundColor Yellow -NoNewline
+    Write-Host ' to paste in legacy terminals (Ctrl+V may not work)' -ForegroundColor DarkGray
     Write-Host "  $([char]0x25B8) " -ForegroundColor DarkCyan -NoNewline
     return (Read-Host $Prompt)
 }
@@ -160,7 +188,7 @@ if (-not $cfgToken) {
     Write-Host '       Permissions: ' -ForegroundColor DarkGray -NoNewline
     Write-Host 'Send Messages, Embed Links, Attach Files, Use Slash Commands' -ForegroundColor White
     Write-Host ''
-    $cfgToken = Read-SecureInput 'Paste your Discord bot token'
+    $cfgToken = Read-SecureInput 'Paste your Discord bot token' -OfferClipboard
     if (-not $cfgToken) { Write-Fatal 'DISCORD_TOKEN is required.' }
     [Environment]::SetEnvironmentVariable('DISCORD_TOKEN', $cfgToken, 'Process')
     $script:EnvChanged = $true
@@ -208,7 +236,7 @@ if (-not $cfgGH) {
     Write-Host 'Enter' -ForegroundColor Yellow -NoNewline
     Write-Host ' to skip.' -ForegroundColor DarkGray
     Write-Host ''
-    $cfgGH = Read-SecureInput 'GitHub token (or Enter to skip)'
+    $cfgGH = Read-SecureInput 'GitHub token (or Enter to skip)' -OfferClipboard
     if ($cfgGH) {
         [Environment]::SetEnvironmentVariable('GITHUB_TOKEN', $cfgGH, 'Process')
         $script:EnvChanged = $true
