@@ -178,6 +178,12 @@ function _buildSessionCallbacks(channelId, channel) {
           ctx.output?.append(`\n❌ \`${toolName}\`: ${errMsg}\n`);
         }
       }
+      // Ensure a newline after tool execution so the next text delta
+      // doesn't run into the previous paragraph.
+      if (ctx.output && ctx.output.content && !ctx.output.content.endsWith("\n")) {
+        ctx.output.content += "\n";
+        ctx.output._pendingContent += "\n";
+      }
       const count = ctx._toolsCompleted;
       const icon = success ? "✅" : "❌";
       ctx.output?.status(`${icon} \`${toolName}\`  · ${count} tool${count !== 1 ? "s" : ""} done`);
