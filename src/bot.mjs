@@ -199,6 +199,11 @@ const commands = [
 // ── Access Control ──────────────────────────────────────────────────────────
 
 function isAllowed(interaction) {
+  const isDM = !interaction.guildId;
+
+  // DMs bypass guild and role checks
+  if (isDM) return true;
+
   if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(interaction.guildId)) return false;
   if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(interaction.channelId)) return false;
   if (ADMIN_ROLE_IDS) {
@@ -211,6 +216,8 @@ function isAllowed(interaction) {
 }
 
 function isAdmin(interaction) {
+  // DM users are treated as admins (they have direct bot access)
+  if (!interaction.guildId) return true;
   if (!ADMIN_ROLE_IDS) return true;
   const memberRoles = interaction.member?.roles?.cache;
   return memberRoles ? [...ADMIN_ROLE_IDS].some((id) => memberRoles.has(id)) : false;
@@ -899,26 +906,43 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// ── Follow-up in Threads ────────────────────────────────────────────────────
+// ── Follow-up in Threads & DMs ──────────────────────────────────────────────
 
 client.on("messageCreate", async (message) => {
-  // Ignore bots and non-thread messages
   if (message.author.bot) return;
+
+  const isDM = !message.guild;
+
+  // ── DM follow-ups: if a session exists for this DM channel, treat as follow-up
+  if (isDM) {
+    const dmChannelId = message.channel.id;
+    const status = getSessionStatus(dmChannelId);
+    if (!status) return; // No active session in this DM — ignore
+
+    const prompt = message.content.trim();
+    if (!prompt) return;
+
+    log.info("Follow-up in DM", { channelId: dmChannelId, prompt: prompt.slice(0, 100) });
+
+    enqueueTask(dmChannelId, message.channel, prompt, message.channel, { id: message.author.id, tag: message.author.tag }).catch((err) => {
+      message.channel
+        .send(`❌ **Follow-up failed:** ${err.message}`)
+        .catch(() => {});
+    });
+    return;
+  }
+
+  // ── Thread follow-ups (guild channels)
   if (!message.channel.isThread()) return;
 
-  // Check if the thread was created by our bot (starter message author)
   const parent = message.channel.parent;
   if (!parent) return;
   const parentId = parent.id;
 
-  // Only handle threads in allowed guilds and channels
   if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(parent.guildId)) return;
   if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(parentId)) return;
-
-  // Check that we own this thread (the thread's ownerId matches the bot)
   if (message.channel.ownerId !== client.user.id) return;
 
-  // RBAC: check admin roles for follow-up messages
   if (ADMIN_ROLE_IDS) {
     const memberRoles = message.member?.roles?.cache;
     if (!memberRoles || ![...ADMIN_ROLE_IDS].some((id) => memberRoles.has(id))) {
