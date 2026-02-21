@@ -11,7 +11,7 @@
   else if (platform.startsWith("mac") || ua.includes("macintosh")) os = "macos";
   else if (platform.startsWith("linux") || ua.includes("linux")) os = "linux";
 
-  const base = "https://github.com/epantke/remote-coding-agent/releases/latest/download/";
+  const base = "https://github.com/epantke/discord-autopilot/releases/latest/download/";
 
   if (os === "windows") {
     btn.href = base + "agent.ps1";
@@ -23,7 +23,7 @@
     btn.href = base + "agent.sh";
     btn.textContent = "↓ Download for Linux";
   } else {
-    btn.href = "https://github.com/epantke/remote-coding-agent/releases/latest";
+    btn.href = "https://github.com/epantke/discord-autopilot/releases/latest";
     btn.textContent = "↓ Download";
   }
 })();

@@ -4,11 +4,11 @@
 
 **Delegate coding tasks to an autonomous AI agent — right from Discord.**
 
-[![CI](https://github.com/epantke/remote-coding-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/epantke/remote-coding-agent/actions/workflows/ci.yml)
-[![GitHub Release](https://img.shields.io/github/v/release/epantke/remote-coding-agent?logo=github)](https://github.com/epantke/remote-coding-agent/releases/latest)
-[![GitHub Stars](https://img.shields.io/github/stars/epantke/remote-coding-agent?style=flat&logo=github)](https://github.com/epantke/remote-coding-agent/stargazers)
+[![CI](https://github.com/epantke/discord-autopilot/actions/workflows/ci.yml/badge.svg)](https://github.com/epantke/discord-autopilot/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/epantke/discord-autopilot?logo=github)](https://github.com/epantke/discord-autopilot/releases/latest)
+[![GitHub Stars](https://img.shields.io/github/stars/epantke/discord-autopilot?style=flat&logo=github)](https://github.com/epantke/discord-autopilot/stargazers)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Pages](https://img.shields.io/badge/docs-GitHub%20Pages-5865F2?logo=github)](https://epantke.github.io/remote-coding-agent/)
+[![Pages](https://img.shields.io/badge/docs-GitHub%20Pages-5865F2?logo=github)](https://epantke.github.io/discord-autopilot/)
 
 </div>
 
@@ -16,7 +16,7 @@
 
 Drop a `/task` in Discord and the agent edits files, runs tests, commits — and streams progress live into a thread. `git push` always requires your approval first.
 
-> **📖 [Full documentation & interactive guide →](https://epantke.github.io/remote-coding-agent/)**
+> **📖 [Full documentation & interactive guide →](https://epantke.github.io/discord-autopilot/)**
 
 ## Highlights
 
@@ -161,7 +161,7 @@ src/
 
 The agent enforces **deny-by-default** security: all file/shell access outside the workspace is blocked, `git push` requires button approval, and secrets are auto-redacted before posting to Discord. Additional layers include symlink-safe path resolution, compound command scanning, RBAC, grant TTL with auto-revoke, and per-channel workspace isolation.
 
-See the [full security breakdown](https://epantke.github.io/remote-coding-agent/#security) for details.
+See the [full security breakdown](https://epantke.github.io/discord-autopilot/#security) for details.
 
 ## Standalone Build
 
