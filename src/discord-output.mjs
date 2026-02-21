@@ -1,5 +1,6 @@
 import { DISCORD_EDIT_THROTTLE_MS } from "./config.mjs";
 import { AttachmentBuilder } from "discord.js";
+import { redactSecrets } from "./secret-scanner.mjs";
 
 /**
  * Manages streaming output from Copilot to a Discord channel.
@@ -70,7 +71,7 @@ export class DiscordOutput {
     }
     this._flushing = true;
 
-    const content = this.buffer;
+    const content = redactSecrets(this.buffer).clean;
     this.buffer = "";
 
     try {

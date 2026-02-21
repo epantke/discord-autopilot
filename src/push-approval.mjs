@@ -5,6 +5,7 @@ import {
   ButtonStyle,
 } from "discord.js";
 import { execSync } from "node:child_process";
+import { redactSecrets } from "./secret-scanner.mjs";
 
 /**
  * Collects git info and posts a push-approval embed with buttons.
@@ -15,22 +16,26 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
   let logSummary = "";
 
   try {
-    diffSummary = execSync("git diff --stat HEAD~1 2>/dev/null || git diff --stat", {
-      cwd: workspacePath,
-      encoding: "utf-8",
-      timeout: 10_000,
-      shell: true,
-    }).slice(0, 900);
+    diffSummary = redactSecrets(
+      execSync("git diff --stat HEAD~1 2>/dev/null || git diff --stat", {
+        cwd: workspacePath,
+        encoding: "utf-8",
+        timeout: 10_000,
+        shell: true,
+      }).slice(0, 900)
+    ).clean;
   } catch {
     diffSummary = "(diff unavailable)";
   }
 
   try {
-    logSummary = execSync("git log --oneline -5", {
-      cwd: workspacePath,
-      encoding: "utf-8",
-      timeout: 5_000,
-    }).slice(0, 500);
+    logSummary = redactSecrets(
+      execSync("git log --oneline -5", {
+        cwd: workspacePath,
+        encoding: "utf-8",
+        timeout: 5_000,
+      }).slice(0, 500)
+    ).clean;
   } catch {
     logSummary = "(log unavailable)";
   }
@@ -96,6 +101,7 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
 
 /**
  * Execute the push and report result back to Discord.
+ * On success, offer a "Create PR" button.
  */
 export async function executePush(channel, workspacePath, command) {
   try {
@@ -111,7 +117,53 @@ export async function executePush(channel, workspacePath, command) {
       .setDescription(`\`\`\`\n${(output || "(no output)").slice(0, 1800)}\n\`\`\``)
       .setTimestamp();
 
-    await channel.send({ embeds: [embed] });
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("create_pr")
+        .setLabel("📝 Create PR")
+        .setStyle(ButtonStyle.Primary)
+    );
+
+    const msg = await channel.send({ embeds: [embed], components: [row] });
+
+    // Collector for "Create PR" button
+    const collector = msg.createMessageComponentCollector({
+      filter: (i) => i.customId === "create_pr",
+      max: 1,
+      time: 600_000,
+    });
+
+    collector.on("collect", async (interaction) => {
+      await interaction.deferUpdate();
+      try {
+        const prOutput = execSync("gh pr create --fill 2>&1", {
+          cwd: workspacePath,
+          encoding: "utf-8",
+          timeout: 30_000,
+          shell: true,
+        });
+        const prEmbed = new EmbedBuilder()
+          .setTitle("📝 PR Created")
+          .setColor(0x6e5494)
+          .setDescription(redactSecrets(prOutput.slice(0, 1800)).clean)
+          .setTimestamp();
+        await msg.edit({ embeds: [embed, prEmbed], components: [] });
+      } catch (err) {
+        const errEmbed = new EmbedBuilder()
+          .setTitle("❌ PR Creation Failed")
+          .setColor(0xcc0000)
+          .setDescription(`\`\`\`\n${(err.stderr || err.message || "").slice(0, 1000)}\n\`\`\``)
+          .setTimestamp();
+        await msg.edit({ embeds: [embed, errEmbed], components: [] });
+      }
+    });
+
+    collector.on("end", (collected) => {
+      if (collected.size === 0) {
+        msg.edit({ components: [] }).catch(() => {});
+      }
+    });
+
     return { success: true, output };
   } catch (err) {
     const embed = new EmbedBuilder()

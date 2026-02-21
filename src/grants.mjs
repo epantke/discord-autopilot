@@ -6,6 +6,9 @@ import {
   deleteGrantsByChannel,
   purgeExpiredGrants,
 } from "./state.mjs";
+import { createLogger } from "./logger.mjs";
+
+const log = createLogger("grants");
 
 /**
  * In-memory grant store per channel.
@@ -58,6 +61,7 @@ export function addGrant(channelId, grantPath, mode, ttlMinutes) {
   timer.unref(); // don't keep process alive
 
   grants.set(grantPath, { mode, expiry, timer });
+  log.info("Grant added", { channelId, path: grantPath, mode, ttlMinutes });
 
   return { path: grantPath, mode, ttlMinutes, expiresAt };
 }
@@ -70,6 +74,7 @@ export function revokeGrant(channelId, grantPath) {
   if (existing?.timer) clearTimeout(existing.timer);
   grants.delete(grantPath);
   deleteGrant(channelId, grantPath);
+  log.info("Grant revoked", { channelId, path: grantPath });
   return true;
 }
 

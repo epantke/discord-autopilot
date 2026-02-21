@@ -1,15 +1,13 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { createLogger } from "./logger.mjs";
+
+const log = createLogger("config");
 
 // ── Required ────────────────────────────────────────────────────────────────
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 if (!DISCORD_TOKEN) {
-  console.error(
-    `\n[FATAL] DISCORD_TOKEN is not set.\n\n` +
-      `  export DISCORD_TOKEN="your-bot-token-here"\n\n` +
-      `Create a bot at https://discord.com/developers/applications\n` +
-      `then copy the token and set it as an environment variable.\n`
-  );
+  log.error("DISCORD_TOKEN is not set. Export it and restart.");
   process.exit(1);
 }
 
@@ -42,6 +40,18 @@ const DISCORD_EDIT_THROTTLE_MS = parseInt(
 );
 const DEFAULT_GRANT_MODE = "ro";
 const DEFAULT_GRANT_TTL_MIN = 30;
+const TASK_TIMEOUT_MS = parseInt(
+  process.env.TASK_TIMEOUT_MS || String(30 * 60_000),
+  10
+);
+const RATE_LIMIT_WINDOW_MS = parseInt(
+  process.env.RATE_LIMIT_WINDOW_MS || "60000",
+  10
+);
+const RATE_LIMIT_MAX = parseInt(
+  process.env.RATE_LIMIT_MAX || "10",
+  10
+);
 
 export {
   DISCORD_TOKEN,
@@ -57,4 +67,7 @@ export {
   DISCORD_EDIT_THROTTLE_MS,
   DEFAULT_GRANT_MODE,
   DEFAULT_GRANT_TTL_MIN,
+  TASK_TIMEOUT_MS,
+  RATE_LIMIT_WINDOW_MS,
+  RATE_LIMIT_MAX,
 };

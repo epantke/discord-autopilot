@@ -1,5 +1,8 @@
 import { realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
+import { createLogger } from "./logger.mjs";
+
+const log = createLogger("policy");
 
 // ── Path Security ───────────────────────────────────────────────────────────
 
@@ -148,6 +151,7 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
 
     // Hard Gate A: git push (checks compound commands & subshells)
     if (isGitPushCommand(cmd)) {
+      log.warn("Push blocked — requires approval", { command: cmd });
       return {
         decision: "deny",
         reason: `git push requires Discord approval. Command: ${cmd}`,
@@ -192,6 +196,7 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
     if (isGranted(filePath, grants, "ro")) {
       return { decision: "allow" };
     }
+    log.warn("Read access denied", { path: filePath });
     return {
       decision: "deny",
       reason: `Read access outside workspace denied: ${filePath}`,
@@ -210,6 +215,7 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
     if (isGranted(filePath, grants, "rw")) {
       return { decision: "allow" };
     }
+    log.warn("Write access denied", { path: filePath });
     return {
       decision: "deny",
       reason: `Write access outside workspace denied: ${filePath}`,

@@ -5,6 +5,7 @@ import {
   Routes,
   SlashCommandBuilder,
   EmbedBuilder,
+  AttachmentBuilder,
 } from "discord.js";
 
 import {
@@ -19,6 +20,8 @@ import {
   BASE_ROOT,
   WORKSPACES_ROOT,
   REPO_PATH,
+  RATE_LIMIT_WINDOW_MS,
+  RATE_LIMIT_MAX,
 } from "./config.mjs";
 
 import {
@@ -37,6 +40,11 @@ import {
 import { addGrant, revokeGrant, startGrantCleanup, restoreGrants } from "./grants.mjs";
 import { closeDb, getAllSessions } from "./state.mjs";
 import { stopCopilotClient } from "./copilot-client.mjs";
+import { redactSecrets } from "./secret-scanner.mjs";
+import { createLogger } from "./logger.mjs";
+import { execSync } from "node:child_process";
+
+const log = createLogger("bot");
 
 // ── Slash Commands Definition ───────────────────────────────────────────────
 
@@ -134,6 +142,38 @@ const commands = [
   new SlashCommandBuilder()
     .setName("config")
     .setDescription("View current bot configuration"),
+
+  new SlashCommandBuilder()
+    .setName("diff")
+    .setDescription("Show git diff for the agent workspace")
+    .addStringOption((opt) =>
+      opt
+        .setName("mode")
+        .setDescription("Diff mode")
+        .addChoices(
+          { name: "Summary (stat)", value: "stat" },
+          { name: "Full diff", value: "full" },
+          { name: "Staged only", value: "staged" }
+        )
+    ),
+
+  new SlashCommandBuilder()
+    .setName("branch")
+    .setDescription("Manage agent branches")
+    .addStringOption((opt) =>
+      opt
+        .setName("action")
+        .setDescription("What to do")
+        .addChoices(
+          { name: "List branches", value: "list" },
+          { name: "Show current branch", value: "current" },
+          { name: "Create new branch", value: "create" },
+          { name: "Switch branch", value: "switch" }
+        )
+    )
+    .addStringOption((opt) =>
+      opt.setName("name").setDescription("Branch name (for create/switch)")
+    ),
 ];
 
 // ── Access Control ──────────────────────────────────────────────────────────
@@ -151,6 +191,37 @@ function isAllowed(interaction) {
   return true;
 }
 
+function isAdmin(interaction) {
+  if (!ADMIN_ROLE_IDS) return true;
+  const memberRoles = interaction.member?.roles?.cache;
+  return memberRoles ? [...ADMIN_ROLE_IDS].some((id) => memberRoles.has(id)) : false;
+}
+
+// ── Rate Limiting ───────────────────────────────────────────────────────────
+
+/** Map<userId, number[]> — timestamps of recent commands */
+const rateLimitMap = new Map();
+
+/**
+ * Returns true if the user is rate-limited. Admins bypass rate limits.
+ */
+function isRateLimited(interaction) {
+  if (isAdmin(interaction)) return false;
+  const userId = interaction.user.id;
+  const now = Date.now();
+  let timestamps = rateLimitMap.get(userId);
+  if (!timestamps) {
+    timestamps = [];
+    rateLimitMap.set(userId, timestamps);
+  }
+  // Remove entries outside the window
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  while (timestamps.length > 0 && timestamps[0] <= cutoff) timestamps.shift();
+  if (timestamps.length >= RATE_LIMIT_MAX) return true;
+  timestamps.push(now);
+  return false;
+}
+
 // ── Register Slash Commands ─────────────────────────────────────────────────
 
 async function registerCommands(clientId) {
@@ -163,12 +234,12 @@ async function registerCommands(clientId) {
       await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
         body,
       });
-      console.log(`[discord] Registered slash commands in guild ${guildId}`);
+      log.info("Registered slash commands", { guildId });
     }
   } else {
     // Global (may take up to 1h to propagate)
     await rest.put(Routes.applicationCommands(clientId), { body });
-    console.log("[discord] Registered global slash commands");
+    log.info("Registered global slash commands");
   }
 }
 
@@ -183,12 +254,11 @@ const client = new Client({
 });
 
 client.once("ready", async () => {
-  console.log(`[discord] Logged in as ${client.user.tag}`);
+  log.info("Logged in", { tag: client.user.tag });
   try {
     await registerCommands(client.user.id);
   } catch (err) {
-    console.error("[discord] Failed to register slash commands:", err.message);
-    console.error("[discord] Bot will continue, but commands may not appear. Retry by restarting.");
+    log.error("Failed to register slash commands — bot continues but commands may not appear", { error: err.message });
   }
   startGrantCleanup();
 
@@ -197,7 +267,7 @@ client.once("ready", async () => {
     restoreGrants(row.channel_id);
   }
 
-  console.log(`[discord] Bot ready — project: ${PROJECT_NAME}`);
+  log.info("Bot ready", { project: PROJECT_NAME });
 });
 
 // ── Interaction Handler ─────────────────────────────────────────────────────
@@ -216,6 +286,14 @@ client.on("interactionCreate", async (interaction) => {
     return;
   }
 
+  if (isRateLimited(interaction)) {
+    await interaction.reply({
+      content: `⏳ Rate limited — max ${RATE_LIMIT_MAX} commands per ${Math.round(RATE_LIMIT_WINDOW_MS / 1000)}s. Please wait.`,
+      ephemeral: true,
+    });
+    return;
+  }
+
   const { commandName, channelId } = interaction;
   const channel = interaction.channel;
 
@@ -226,9 +304,16 @@ client.on("interactionCreate", async (interaction) => {
         const prompt = interaction.options.getString("prompt");
         await interaction.reply(`📋 **Task queued:** ${prompt}`);
 
+        // Create a thread for this task's output
+        const reply = await interaction.fetchReply();
+        const thread = await reply.startThread({
+          name: `Task: ${prompt.slice(0, 90)}`,
+          autoArchiveDuration: 1440,
+        });
+
         // Fire and forget — streaming output handled by session manager
-        enqueueTask(channelId, channel, prompt).catch((err) => {
-          channel
+        enqueueTask(channelId, channel, prompt, thread).catch((err) => {
+          thread
             .send(`❌ **Task failed:** ${err.message}`)
             .catch(() => {});
         });
@@ -498,11 +583,143 @@ client.on("interactionCreate", async (interaction) => {
         break;
       }
 
+      // ── /diff ─────────────────────────────────────────────────────────
+      case "diff": {
+        const status = getSessionStatus(channelId);
+        if (!status) {
+          await interaction.reply({
+            content: "No active session. Use `/task` first.",
+            ephemeral: true,
+          });
+          break;
+        }
+
+        const mode = interaction.options.getString("mode") || "stat";
+        const gitCmd =
+          mode === "stat"
+            ? "git diff --stat"
+            : mode === "staged"
+              ? "git diff --cached"
+              : "git diff";
+
+        await interaction.deferReply();
+
+        try {
+          const output = execSync(gitCmd, {
+            cwd: status.workspace,
+            encoding: "utf-8",
+            timeout: 15_000,
+          });
+
+          if (!output.trim()) {
+            await interaction.editReply("No changes.");
+            break;
+          }
+
+          const clean = redactSecrets(output).clean;
+
+          if (clean.length <= 1900) {
+            await interaction.editReply(`\`\`\`diff\n${clean}\n\`\`\``);
+          } else {
+            const attachment = new AttachmentBuilder(Buffer.from(clean, "utf-8"), {
+              name: "diff.txt",
+              description: `git diff (${mode})`,
+            });
+            await interaction.editReply({ files: [attachment] });
+          }
+        } catch (err) {
+          await interaction.editReply(`❌ \`${gitCmd}\` failed: ${err.message}`);
+        }
+        break;
+      }
+
+      // ── /branch ───────────────────────────────────────────────────────
+      case "branch": {
+        const status = getSessionStatus(channelId);
+        if (!status) {
+          await interaction.reply({
+            content: "No active session. Use `/task` first.",
+            ephemeral: true,
+          });
+          break;
+        }
+
+        const action = interaction.options.getString("action") || "current";
+        const branchName = interaction.options.getString("name");
+
+        if (action === "current") {
+          await interaction.reply(`Current branch: \`${status.branch}\``);
+          break;
+        }
+
+        if (action === "list") {
+          try {
+            const branches = execSync("git branch --list", {
+              cwd: status.workspace,
+              encoding: "utf-8",
+              timeout: 5_000,
+            }).trim();
+            await interaction.reply(`\`\`\`\n${branches}\n\`\`\``);
+          } catch (err) {
+            await interaction.reply(`❌ Failed: ${err.message}`);
+          }
+          break;
+        }
+
+        if (!branchName) {
+          await interaction.reply({
+            content: `Please provide a branch name for \`${action}\`.`,
+            ephemeral: true,
+          });
+          break;
+        }
+
+        // Guard: no branch operations while working
+        if (status.status === "working") {
+          await interaction.reply({
+            content: "⚠️ Cannot switch/create branches while a task is running. Use `/stop` first.",
+            ephemeral: true,
+          });
+          break;
+        }
+
+        await interaction.deferReply();
+
+        if (action === "create") {
+          try {
+            execSync(`git checkout -b "${branchName}"`, {
+              cwd: status.workspace,
+              encoding: "utf-8",
+              timeout: 10_000,
+            });
+            await interaction.editReply(`✅ Created and switched to branch \`${branchName}\`.`);
+          } catch (err) {
+            await interaction.editReply(`❌ Failed: ${err.message}`);
+          }
+          break;
+        }
+
+        if (action === "switch") {
+          try {
+            execSync(`git checkout "${branchName}"`, {
+              cwd: status.workspace,
+              encoding: "utf-8",
+              timeout: 10_000,
+            });
+            await interaction.editReply(`✅ Switched to branch \`${branchName}\`.`);
+          } catch (err) {
+            await interaction.editReply(`❌ Failed: ${err.message}`);
+          }
+          break;
+        }
+        break;
+      }
+
       default:
         await interaction.reply({ content: "Unknown command.", ephemeral: true });
     }
   } catch (err) {
-    console.error(`[discord] Command error (${commandName}):`, err);
+    log.error("Command error", { command: commandName, error: err.message });
     const reply = interaction.deferred || interaction.replied
       ? (msg) => interaction.editReply(msg)
       : (msg) => interaction.reply({ content: msg, ephemeral: true });
@@ -510,10 +727,40 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
+// ── Follow-up in Threads ────────────────────────────────────────────────────
+
+client.on("messageCreate", async (message) => {
+  // Ignore bots and non-thread messages
+  if (message.author.bot) return;
+  if (!message.channel.isThread()) return;
+
+  // Check if the thread was created by our bot (starter message author)
+  const parent = message.channel.parent;
+  if (!parent) return;
+  const parentId = parent.id;
+
+  // Only handle threads in allowed channels
+  if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(parentId)) return;
+
+  // Check that we own this thread (the thread's ownerId matches the bot)
+  if (message.channel.ownerId !== client.user.id) return;
+
+  const prompt = message.content.trim();
+  if (!prompt) return;
+
+  log.info("Follow-up in thread", { channelId: parentId, threadId: message.channel.id, prompt: prompt.slice(0, 100) });
+
+  enqueueTask(parentId, parent, prompt, message.channel).catch((err) => {
+    message.channel
+      .send(`❌ **Follow-up failed:** ${err.message}`)
+      .catch(() => {});
+  });
+});
+
 // ── Graceful Shutdown ───────────────────────────────────────────────────────
 
 async function shutdown(signal) {
-  console.log(`\n[bot] Received ${signal}, shutting down…`);
+  log.info("Shutting down", { signal });
   client.destroy();
   await stopCopilotClient();
   closeDb();
@@ -523,10 +770,10 @@ async function shutdown(signal) {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("unhandledRejection", (err) => {
-  console.error("[bot] Unhandled rejection:", err);
+  log.error("Unhandled rejection", { error: err?.message || String(err) });
 });
 
 // ── Start ───────────────────────────────────────────────────────────────────
 
-console.log("[bot] Starting Discord bot…");
+log.info("Starting Discord bot");
 client.login(DISCORD_TOKEN);

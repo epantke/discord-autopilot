@@ -140,24 +140,103 @@ cat > "$APP/package.json" << 'HEREDOC_PACKAGE'
 }
 HEREDOC_PACKAGE
 
+# ── src/logger.mjs ──────────────────────────────────────────────────────────
+cat > "$APP/src/logger.mjs" << 'HEREDOC_LOGGER'
+const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
+const LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.toLowerCase()] ?? LOG_LEVELS.info;
+
+function emit(level, component, message, data) {
+  if (LOG_LEVELS[level] < LEVEL) return;
+  const entry = {
+    ts: new Date().toISOString(),
+    level,
+    component,
+    msg: message,
+  };
+  if (data !== undefined) entry.data = data;
+  const out = level === "error" ? process.stderr : process.stdout;
+  out.write(JSON.stringify(entry) + "\n");
+}
+
+export function createLogger(component) {
+  return {
+    debug: (msg, data) => emit("debug", component, msg, data),
+    info: (msg, data) => emit("info", component, msg, data),
+    warn: (msg, data) => emit("warn", component, msg, data),
+    error: (msg, data) => emit("error", component, msg, data),
+  };
+}
+HEREDOC_LOGGER
+
+# ── src/secret-scanner.mjs ──────────────────────────────────────────────────
+cat > "$APP/src/secret-scanner.mjs" << 'HEREDOC_SECRETS'
+import { createLogger } from "./logger.mjs";
+
+const log = createLogger("secrets");
+
+const TOKEN_PATTERNS = [
+  { label: "GitHub PAT (classic)", re: /ghp_[A-Za-z0-9]{36,}/ },
+  { label: "GitHub PAT (fine-grained)", re: /github_pat_[A-Za-z0-9_]{22,}/ },
+  { label: "GitHub OAuth", re: /gho_[A-Za-z0-9]{36,}/ },
+  { label: "GitHub App token", re: /(?:ghu|ghs|ghr)_[A-Za-z0-9]{36,}/ },
+  { label: "OpenAI API key", re: /sk-[A-Za-z0-9]{20,}/ },
+  { label: "AWS Access Key", re: /AKIA[0-9A-Z]{16}/ },
+  { label: "Slack token", re: /xox[bprsao]-[0-9A-Za-z-]{10,}/ },
+  { label: "Discord bot token", re: /[MN][A-Za-z\d]{23,}\.[A-Za-z\d_-]{6}\.[A-Za-z\d_-]{27,}/ },
+  { label: "Generic secret", re: /(?:secret|token|password|api_key|apikey)\s*[:=]\s*["'][^"']{8,}["']/i },
+];
+
+const envValues = new Set();
+for (const [key, val] of Object.entries(process.env)) {
+  if (val && val.length >= 8 && /TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL/i.test(key)) {
+    envValues.add(val);
+  }
+}
+
+const REDACTED = "[REDACTED]";
+
+export function redactSecrets(text) {
+  if (!text) return { clean: text, found: [] };
+  let clean = text;
+  const found = [];
+
+  for (const { label, re } of TOKEN_PATTERNS) {
+    const global = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+    if (global.test(clean)) {
+      found.push(label);
+      clean = clean.replace(global, REDACTED);
+    }
+  }
+
+  for (const val of envValues) {
+    if (clean.includes(val)) {
+      found.push("ENV value");
+      clean = clean.split(val).join(REDACTED);
+    }
+  }
+
+  if (found.length > 0) {
+    log.warn("Secrets redacted", { labels: found });
+  }
+
+  return { clean, found };
+}
+HEREDOC_SECRETS
+
 # ── src/config.mjs ──────────────────────────────────────────────────────────
 cat > "$APP/src/config.mjs" << 'HEREDOC_CONFIG'
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { createLogger } from "./logger.mjs";
 
-// ── Required ────────────────────────────────────────────────────────────────
+const log = createLogger("config");
+
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 if (!DISCORD_TOKEN) {
-  console.error(
-    `\n[FATAL] DISCORD_TOKEN is not set.\n\n` +
-      `  export DISCORD_TOKEN="your-bot-token-here"\n\n` +
-      `Create a bot at https://discord.com/developers/applications\n` +
-      `then copy the token and set it as an environment variable.\n`
-  );
+  log.error("DISCORD_TOKEN is not set. Export it and restart.");
   process.exit(1);
 }
 
-// ── Paths ───────────────────────────────────────────────────────────────────
 const BASE_ROOT =
   process.env.BASE_ROOT || join(homedir(), ".local", "share", "discord-agent");
 const WORKSPACES_ROOT =
@@ -165,11 +244,9 @@ const WORKSPACES_ROOT =
 const REPOS_ROOT = join(BASE_ROOT, "repos");
 const STATE_DB_PATH = join(BASE_ROOT, "state.sqlite");
 
-// ── Project (set at runtime by agent.sh via env) ────────────────────────────
 const PROJECT_NAME = process.env.PROJECT_NAME || "default";
 const REPO_PATH = process.env.REPO_PATH || join(REPOS_ROOT, PROJECT_NAME);
 
-// ── Optional filters ────────────────────────────────────────────────────────
 function csvToSet(envVal) {
   if (!envVal) return null;
   return new Set(envVal.split(",").map((s) => s.trim()).filter(Boolean));
@@ -179,28 +256,26 @@ const ALLOWED_GUILDS = csvToSet(process.env.ALLOWED_GUILDS);
 const ALLOWED_CHANNELS = csvToSet(process.env.ALLOWED_CHANNELS);
 const ADMIN_ROLE_IDS = csvToSet(process.env.ADMIN_ROLE_IDS);
 
-// ── Tunables ────────────────────────────────────────────────────────────────
 const DISCORD_EDIT_THROTTLE_MS = parseInt(
-  process.env.DISCORD_EDIT_THROTTLE_MS || "1500",
-  10
+  process.env.DISCORD_EDIT_THROTTLE_MS || "1500", 10
 );
 const DEFAULT_GRANT_MODE = "ro";
 const DEFAULT_GRANT_TTL_MIN = 30;
+const TASK_TIMEOUT_MS = parseInt(
+  process.env.TASK_TIMEOUT_MS || String(30 * 60_000), 10
+);
+const RATE_LIMIT_WINDOW_MS = parseInt(
+  process.env.RATE_LIMIT_WINDOW_MS || "60000", 10
+);
+const RATE_LIMIT_MAX = parseInt(
+  process.env.RATE_LIMIT_MAX || "10", 10
+);
 
 export {
-  DISCORD_TOKEN,
-  BASE_ROOT,
-  WORKSPACES_ROOT,
-  REPOS_ROOT,
-  STATE_DB_PATH,
-  PROJECT_NAME,
-  REPO_PATH,
-  ALLOWED_GUILDS,
-  ALLOWED_CHANNELS,
-  ADMIN_ROLE_IDS,
-  DISCORD_EDIT_THROTTLE_MS,
-  DEFAULT_GRANT_MODE,
-  DEFAULT_GRANT_TTL_MIN,
+  DISCORD_TOKEN, BASE_ROOT, WORKSPACES_ROOT, REPOS_ROOT, STATE_DB_PATH,
+  PROJECT_NAME, REPO_PATH, ALLOWED_GUILDS, ALLOWED_CHANNELS, ADMIN_ROLE_IDS,
+  DISCORD_EDIT_THROTTLE_MS, DEFAULT_GRANT_MODE, DEFAULT_GRANT_TTL_MIN,
+  TASK_TIMEOUT_MS, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX,
 };
 HEREDOC_CONFIG
 
@@ -211,48 +286,75 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { STATE_DB_PATH } from "./config.mjs";
 
-// Ensure parent directory exists
 mkdirSync(dirname(STATE_DB_PATH), { recursive: true });
 
 const db = new Database(STATE_DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
-// ── Schema ──────────────────────────────────────────────────────────────────
-db.exec(`
-  CREATE TABLE IF NOT EXISTS sessions (
-    channel_id    TEXT PRIMARY KEY,
-    project_name  TEXT NOT NULL,
-    workspace_path TEXT NOT NULL,
-    branch        TEXT NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'idle',
-    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-  );
+// ── Migrations ──────────────────────────────────────────────────────────────
 
-  CREATE TABLE IF NOT EXISTS grants (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel_id  TEXT NOT NULL,
-    path        TEXT NOT NULL,
-    mode        TEXT NOT NULL DEFAULT 'ro',
-    expires_at  TEXT NOT NULL,
-    UNIQUE(channel_id, path)
-  );
+db.exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`);
 
-  CREATE TABLE IF NOT EXISTS task_history (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel_id   TEXT NOT NULL,
-    prompt       TEXT NOT NULL,
-    status       TEXT NOT NULL DEFAULT 'running',
-    started_at   TEXT NOT NULL DEFAULT (datetime('now')),
-    completed_at TEXT
-  );
+function getSchemaVersion() {
+  const row = db.prepare("SELECT version FROM schema_version").get();
+  return row ? row.version : 0;
+}
 
-  CREATE INDEX IF NOT EXISTS idx_task_history_channel
-    ON task_history(channel_id, started_at DESC);
+function setSchemaVersion(v) {
+  db.exec("DELETE FROM schema_version");
+  db.prepare("INSERT INTO schema_version (version) VALUES (?)").run(v);
+}
 
-  CREATE INDEX IF NOT EXISTS idx_grants_channel
-    ON grants(channel_id);
-`);
+const migrations = [
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        channel_id    TEXT PRIMARY KEY,
+        project_name  TEXT NOT NULL,
+        workspace_path TEXT NOT NULL,
+        branch        TEXT NOT NULL,
+        status        TEXT NOT NULL DEFAULT 'idle',
+        created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS grants (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id  TEXT NOT NULL,
+        path        TEXT NOT NULL,
+        mode        TEXT NOT NULL DEFAULT 'ro',
+        expires_at  TEXT NOT NULL,
+        UNIQUE(channel_id, path)
+      );
+      CREATE TABLE IF NOT EXISTS task_history (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id   TEXT NOT NULL,
+        prompt       TEXT NOT NULL,
+        status       TEXT NOT NULL DEFAULT 'running',
+        started_at   TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_task_history_channel
+        ON task_history(channel_id, started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_grants_channel
+        ON grants(channel_id);
+    `);
+  },
+  (db) => {
+    db.exec(`ALTER TABLE task_history ADD COLUMN timeout_ms INTEGER`);
+  },
+];
+
+function runMigrations() {
+  const current = getSchemaVersion();
+  if (current >= migrations.length) return;
+  const upgrade = db.transaction(() => {
+    for (let i = current; i < migrations.length; i++) migrations[i](db);
+    setSchemaVersion(migrations.length);
+  });
+  upgrade();
+}
+
+runMigrations();
 
 // ── Sessions ────────────────────────────────────────────────────────────────
 const stmtUpsertSession = db.prepare(`
@@ -264,168 +366,77 @@ const stmtUpsertSession = db.prepare(`
     branch         = excluded.branch,
     status         = excluded.status
 `);
-
-const stmtGetSession = db.prepare(
-  `SELECT * FROM sessions WHERE channel_id = ?`
-);
-
+const stmtGetSession = db.prepare(`SELECT * FROM sessions WHERE channel_id = ?`);
 const stmtAllSessions = db.prepare(`SELECT * FROM sessions`);
-
-const stmtUpdateSessionStatus = db.prepare(
-  `UPDATE sessions SET status = ? WHERE channel_id = ?`
-);
-
-const stmtDeleteSession = db.prepare(
-  `DELETE FROM sessions WHERE channel_id = ?`
-);
+const stmtUpdateSessionStatus = db.prepare(`UPDATE sessions SET status = ? WHERE channel_id = ?`);
+const stmtDeleteSession = db.prepare(`DELETE FROM sessions WHERE channel_id = ?`);
 
 export function upsertSession(channelId, projectName, workspacePath, branch, status = "idle") {
   stmtUpsertSession.run({ channelId, projectName, workspacePath, branch, status });
 }
-
-export function getSession(channelId) {
-  return stmtGetSession.get(channelId) || null;
-}
-
-export function getAllSessions() {
-  return stmtAllSessions.all();
-}
-
-export function updateSessionStatus(channelId, status) {
-  stmtUpdateSessionStatus.run(status, channelId);
-}
-
-export function deleteSession(channelId) {
-  stmtDeleteSession.run(channelId);
-}
+export function getSession(channelId) { return stmtGetSession.get(channelId) || null; }
+export function getAllSessions() { return stmtAllSessions.all(); }
+export function updateSessionStatus(channelId, status) { stmtUpdateSessionStatus.run(status, channelId); }
+export function deleteSession(channelId) { stmtDeleteSession.run(channelId); }
 
 // ── Grants ──────────────────────────────────────────────────────────────────
 const stmtUpsertGrant = db.prepare(`
   INSERT INTO grants (channel_id, path, mode, expires_at)
   VALUES (@channelId, @path, @mode, @expiresAt)
   ON CONFLICT(channel_id, path) DO UPDATE SET
-    mode       = excluded.mode,
-    expires_at = excluded.expires_at
+    mode = excluded.mode, expires_at = excluded.expires_at
 `);
-
-const stmtGetGrants = db.prepare(
-  `SELECT * FROM grants WHERE channel_id = ?`
-);
-
-const stmtDeleteGrant = db.prepare(
-  `DELETE FROM grants WHERE channel_id = ? AND path = ?`
-);
-
-const stmtDeleteExpiredGrants = db.prepare(
-  `DELETE FROM grants WHERE expires_at <= datetime('now')`
-);
-
-const stmtDeleteGrantsByChannel = db.prepare(
-  `DELETE FROM grants WHERE channel_id = ?`
-);
+const stmtGetGrants = db.prepare(`SELECT * FROM grants WHERE channel_id = ?`);
+const stmtDeleteGrant = db.prepare(`DELETE FROM grants WHERE channel_id = ? AND path = ?`);
+const stmtDeleteExpiredGrants = db.prepare(`DELETE FROM grants WHERE expires_at <= datetime('now')`);
+const stmtDeleteGrantsByChannel = db.prepare(`DELETE FROM grants WHERE channel_id = ?`);
 
 export function upsertGrant(channelId, grantPath, mode, expiresAt) {
   stmtUpsertGrant.run({ channelId, path: grantPath, mode, expiresAt });
 }
-
-export function getGrants(channelId) {
-  return stmtGetGrants.all(channelId);
-}
-
-export function deleteGrant(channelId, grantPath) {
-  stmtDeleteGrant.run(channelId, grantPath);
-}
-
-export function deleteExpiredGrants() {
-  return stmtDeleteExpiredGrants.run();
-}
-
-export function deleteGrantsByChannel(channelId) {
-  stmtDeleteGrantsByChannel.run(channelId);
-}
+export function getGrants(channelId) { return stmtGetGrants.all(channelId); }
+export function deleteGrant(channelId, grantPath) { stmtDeleteGrant.run(channelId, grantPath); }
+export function deleteExpiredGrants() { return stmtDeleteExpiredGrants.run(); }
+export function deleteGrantsByChannel(channelId) { stmtDeleteGrantsByChannel.run(channelId); }
 
 // ── Task History ────────────────────────────────────────────────────────────
-const stmtInsertTask = db.prepare(`
-  INSERT INTO task_history (channel_id, prompt, status)
-  VALUES (?, ?, 'running')
-`);
+const stmtInsertTask = db.prepare(`INSERT INTO task_history (channel_id, prompt, status) VALUES (?, ?, 'running')`);
+const stmtCompleteTask = db.prepare(`UPDATE task_history SET status = ?, completed_at = datetime('now') WHERE id = ?`);
+const stmtLatestTask = db.prepare(`SELECT * FROM task_history WHERE channel_id = ? ORDER BY started_at DESC LIMIT 1`);
+const stmtTaskHistory = db.prepare(`SELECT * FROM task_history WHERE channel_id = ? ORDER BY started_at DESC LIMIT ?`);
 
-const stmtCompleteTask = db.prepare(`
-  UPDATE task_history SET status = ?, completed_at = datetime('now')
-  WHERE id = ?
-`);
-
-const stmtLatestTask = db.prepare(`
-  SELECT * FROM task_history WHERE channel_id = ?
-  ORDER BY started_at DESC LIMIT 1
-`);
-
-const stmtTaskHistory = db.prepare(`
-  SELECT * FROM task_history WHERE channel_id = ?
-  ORDER BY started_at DESC LIMIT ?
-`);
-
-export function insertTask(channelId, prompt) {
-  const info = stmtInsertTask.run(channelId, prompt);
-  return info.lastInsertRowid;
-}
-
-export function completeTask(taskId, status) {
-  stmtCompleteTask.run(status, taskId);
-}
-
-export function getLatestTask(channelId) {
-  return stmtLatestTask.get(channelId) || null;
-}
-
-export function getTaskHistory(channelId, limit = 10) {
-  return stmtTaskHistory.all(channelId, limit);
-}
+export function insertTask(channelId, prompt) { return stmtInsertTask.run(channelId, prompt).lastInsertRowid; }
+export function completeTask(taskId, status) { stmtCompleteTask.run(status, taskId); }
+export function getLatestTask(channelId) { return stmtLatestTask.get(channelId) || null; }
+export function getTaskHistory(channelId, limit = 10) { return stmtTaskHistory.all(channelId, limit); }
 
 // ── Cleanup ─────────────────────────────────────────────────────────────────
-export function purgeExpiredGrants() {
-  return deleteExpiredGrants().changes;
-}
-
-export function closeDb() {
-  db.close();
-}
+export function purgeExpiredGrants() { return deleteExpiredGrants().changes; }
+export function closeDb() { db.close(); }
 HEREDOC_STATE
 
 # ── src/policy-engine.mjs ───────────────────────────────────────────────────
 cat > "$APP/src/policy-engine.mjs" << 'HEREDOC_POLICY'
 import { realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
+import { createLogger } from "./logger.mjs";
 
-// ── Path Security ───────────────────────────────────────────────────────────
+const log = createLogger("policy");
 
 function safePath(p) {
-  try {
-    return realpathSync(resolve(p));
-  } catch {
-    return resolve(p);
-  }
+  try { return realpathSync(resolve(p)); } catch { return resolve(p); }
 }
 
 export function isInsideWorkspace(targetPath, workspaceRoot) {
   const resolvedTarget = safePath(targetPath);
   const resolvedRoot = safePath(workspaceRoot);
-  return (
-    resolvedTarget === resolvedRoot ||
-    resolvedTarget.startsWith(resolvedRoot + sep)
-  );
+  return resolvedTarget === resolvedRoot || resolvedTarget.startsWith(resolvedRoot + sep);
 }
 
-// ── Git Push Detection ──────────────────────────────────────────────────────
-
 const GIT_PUSH_PATTERNS = [
-  /\bgit\s+push\b/i,
-  /\bgit\s+remote\s+.*push\b/i,
-  /\bgh\s+pr\s+create\b/i,
-  /\bgh\s+pr\s+merge\b/i,
-  /\bgh\s+pr\s+push\b/i,
+  /\bgit\s+push\b/i, /\bgit\s+remote\s+.*push\b/i,
+  /\bgh\s+pr\s+create\b/i, /\bgh\s+pr\s+merge\b/i, /\bgh\s+pr\s+push\b/i,
 ];
-
 const COMPOUND_SPLIT = /\s*(?:&&|\|\||[;|\n])\s*/;
 const SUBSHELL_WRAPPER = /^\s*(?:sh|bash|zsh|dash)\s+-c\s+['"](.+)['"]\s*$/i;
 
@@ -441,22 +452,17 @@ function extractSubCommands(command) {
 }
 
 export function isGitPushCommand(command) {
-  const parts = extractSubCommands(command);
-  return parts.some((part) =>
+  return extractSubCommands(command).some((part) =>
     GIT_PUSH_PATTERNS.some((re) => re.test(part))
   );
 }
-
-// ── Grant Checking ──────────────────────────────────────────────────────────
 
 export function isGranted(targetPath, grants, requiredMode = "ro") {
   const resolvedTarget = safePath(targetPath);
   for (const [grantPath, grant] of grants) {
     if (Date.now() > grant.expiry) continue;
     const resolvedGrant = safePath(grantPath);
-    const isUnder =
-      resolvedTarget === resolvedGrant ||
-      resolvedTarget.startsWith(resolvedGrant + sep);
+    const isUnder = resolvedTarget === resolvedGrant || resolvedTarget.startsWith(resolvedGrant + sep);
     if (!isUnder) continue;
     if (requiredMode === "ro") return true;
     if (requiredMode === "rw" && grant.mode === "rw") return true;
@@ -464,89 +470,48 @@ export function isGranted(targetPath, grants, requiredMode = "ro") {
   return false;
 }
 
-// ── Tool Name Classification ────────────────────────────────────────────────
-
 const SHELL_TOOLS = new Set(["shell", "bash", "run_in_terminal", "terminal"]);
-const READ_TOOLS = new Set([
-  "read_file", "list_directory", "search_files",
-  "grep_search", "file_search", "semantic_search",
-]);
-const WRITE_TOOLS = new Set([
-  "write_file", "create_file", "delete_file",
-  "replace_string_in_file", "edit_file", "rename_file",
-]);
+const READ_TOOLS = new Set(["read_file", "list_directory", "search_files", "grep_search", "file_search", "semantic_search"]);
+const WRITE_TOOLS = new Set(["write_file", "create_file", "delete_file", "replace_string_in_file", "edit_file", "rename_file"]);
 
-function extractPath(toolArgs) {
-  return toolArgs?.path || toolArgs?.filePath || toolArgs?.file ||
-    toolArgs?.directory || toolArgs?.target || null;
-}
-
-function extractCommand(toolArgs) {
-  return toolArgs?.command || toolArgs?.cmd || toolArgs?.input || "";
-}
-
-function extractCwd(toolArgs) {
-  return toolArgs?.cwd || toolArgs?.workingDirectory || null;
-}
-
-// ── Main Policy Decision ────────────────────────────────────────────────────
+function extractPath(a) { return a?.path || a?.filePath || a?.file || a?.directory || a?.target || null; }
+function extractCommand(a) { return a?.command || a?.cmd || a?.input || ""; }
+function extractCwd(a) { return a?.cwd || a?.workingDirectory || null; }
 
 export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
   if (SHELL_TOOLS.has(toolName)) {
     const cmd = extractCommand(toolArgs);
     if (isGitPushCommand(cmd)) {
-      return {
-        decision: "deny",
-        reason: `git push requires Discord approval. Command: ${cmd}`,
-        gate: "push",
-      };
+      log.warn("Push blocked", { command: cmd });
+      return { decision: "deny", reason: `git push requires Discord approval. Command: ${cmd}`, gate: "push" };
     }
     const cwd = extractCwd(toolArgs);
     if (cwd && !isInsideWorkspace(cwd, workspaceRoot) && !isGranted(cwd, grants, "ro")) {
-      return {
-        decision: "deny",
-        reason: `Shell working directory is outside workspace: ${cwd}`,
-        gate: "outside",
-      };
+      return { decision: "deny", reason: `Shell cwd outside workspace: ${cwd}`, gate: "outside" };
     }
     const cdMatch = cmd.match(/\bcd\s+["']?([^\s"';&|]+)/);
     if (cdMatch) {
       const cdTarget = resolve(workspaceRoot, cdMatch[1]);
       if (!isInsideWorkspace(cdTarget, workspaceRoot) && !isGranted(cdTarget, grants, "ro")) {
-        return {
-          decision: "deny",
-          reason: `Shell cd target is outside workspace: ${cdTarget}`,
-          gate: "outside",
-        };
+        return { decision: "deny", reason: `Shell cd outside workspace: ${cdTarget}`, gate: "outside" };
       }
     }
     return { decision: "allow" };
   }
-
   if (READ_TOOLS.has(toolName)) {
-    const filePath = extractPath(toolArgs);
-    if (!filePath) return { decision: "allow" };
-    if (isInsideWorkspace(filePath, workspaceRoot)) return { decision: "allow" };
-    if (isGranted(filePath, grants, "ro")) return { decision: "allow" };
-    return {
-      decision: "deny",
-      reason: `Read access outside workspace denied: ${filePath}`,
-      gate: "outside",
-    };
+    const fp = extractPath(toolArgs);
+    if (!fp) return { decision: "allow" };
+    if (isInsideWorkspace(fp, workspaceRoot) || isGranted(fp, grants, "ro")) return { decision: "allow" };
+    log.warn("Read access denied", { path: fp });
+    return { decision: "deny", reason: `Read access outside workspace denied: ${fp}`, gate: "outside" };
   }
-
   if (WRITE_TOOLS.has(toolName)) {
-    const filePath = extractPath(toolArgs);
-    if (!filePath) return { decision: "allow" };
-    if (isInsideWorkspace(filePath, workspaceRoot)) return { decision: "allow" };
-    if (isGranted(filePath, grants, "rw")) return { decision: "allow" };
-    return {
-      decision: "deny",
-      reason: `Write access outside workspace denied: ${filePath}`,
-      gate: "outside",
-    };
+    const fp = extractPath(toolArgs);
+    if (!fp) return { decision: "allow" };
+    if (isInsideWorkspace(fp, workspaceRoot) || isGranted(fp, grants, "rw")) return { decision: "allow" };
+    log.warn("Write access denied", { path: fp });
+    return { decision: "deny", reason: `Write access outside workspace denied: ${fp}`, gate: "outside" };
   }
-
   return { decision: "allow" };
 }
 HEREDOC_POLICY
@@ -555,19 +520,16 @@ HEREDOC_POLICY
 cat > "$APP/src/grants.mjs" << 'HEREDOC_GRANTS'
 import { DEFAULT_GRANT_MODE, DEFAULT_GRANT_TTL_MIN } from "./config.mjs";
 import {
-  upsertGrant,
-  deleteGrant,
-  getGrants as dbGetGrants,
-  deleteGrantsByChannel,
-  purgeExpiredGrants,
+  upsertGrant, deleteGrant, getGrants as dbGetGrants,
+  deleteGrantsByChannel, purgeExpiredGrants,
 } from "./state.mjs";
+import { createLogger } from "./logger.mjs";
 
+const log = createLogger("grants");
 const grantStore = new Map();
 
 function channelGrants(channelId) {
-  if (!grantStore.has(channelId)) {
-    grantStore.set(channelId, new Map());
-  }
+  if (!grantStore.has(channelId)) grantStore.set(channelId, new Map());
   return grantStore.get(channelId);
 }
 
@@ -575,10 +537,7 @@ export function getActiveGrants(channelId) {
   const grants = channelGrants(channelId);
   const now = Date.now();
   for (const [p, g] of grants) {
-    if (now > g.expiry) {
-      clearTimeout(g.timer);
-      grants.delete(p);
-    }
+    if (now > g.expiry) { clearTimeout(g.timer); grants.delete(p); }
   }
   return grants;
 }
@@ -586,23 +545,16 @@ export function getActiveGrants(channelId) {
 export function addGrant(channelId, grantPath, mode, ttlMinutes) {
   mode = mode || DEFAULT_GRANT_MODE;
   ttlMinutes = ttlMinutes ?? DEFAULT_GRANT_TTL_MIN;
-
   const expiry = Date.now() + ttlMinutes * 60_000;
   const expiresAt = new Date(expiry).toISOString();
-
   upsertGrant(channelId, grantPath, mode, expiresAt);
-
   const grants = channelGrants(channelId);
   const existing = grants.get(grantPath);
   if (existing?.timer) clearTimeout(existing.timer);
-
-  const timer = setTimeout(() => {
-    revokeGrant(channelId, grantPath);
-  }, ttlMinutes * 60_000);
+  const timer = setTimeout(() => { revokeGrant(channelId, grantPath); }, ttlMinutes * 60_000);
   timer.unref();
-
   grants.set(grantPath, { mode, expiry, timer });
-
+  log.info("Grant added", { channelId, path: grantPath, mode, ttlMinutes });
   return { path: grantPath, mode, ttlMinutes, expiresAt };
 }
 
@@ -612,14 +564,13 @@ export function revokeGrant(channelId, grantPath) {
   if (existing?.timer) clearTimeout(existing.timer);
   grants.delete(grantPath);
   deleteGrant(channelId, grantPath);
+  log.info("Grant revoked", { channelId, path: grantPath });
   return true;
 }
 
 export function revokeAllGrants(channelId) {
   const grants = channelGrants(channelId);
-  for (const [, g] of grants) {
-    if (g.timer) clearTimeout(g.timer);
-  }
+  for (const [, g] of grants) { if (g.timer) clearTimeout(g.timer); }
   grants.clear();
   deleteGrantsByChannel(channelId);
 }
@@ -630,20 +581,15 @@ export function restoreGrants(channelId) {
   for (const row of rows) {
     const expiry = new Date(row.expires_at).getTime();
     if (expiry <= now) continue;
-    const remaining = expiry - now;
     const grants = channelGrants(channelId);
-    const timer = setTimeout(() => {
-      revokeGrant(channelId, row.path);
-    }, remaining);
+    const timer = setTimeout(() => { revokeGrant(channelId, row.path); }, expiry - now);
     timer.unref();
     grants.set(row.path, { mode: row.mode, expiry, timer });
   }
 }
 
 export function startGrantCleanup(intervalMs = 60_000) {
-  const timer = setInterval(() => {
-    purgeExpiredGrants();
-  }, intervalMs);
+  const timer = setInterval(() => { purgeExpiredGrants(); }, intervalMs);
   timer.unref();
   return timer;
 }
@@ -653,6 +599,7 @@ HEREDOC_GRANTS
 cat > "$APP/src/discord-output.mjs" << 'HEREDOC_DISCORDOUT'
 import { DISCORD_EDIT_THROTTLE_MS } from "./config.mjs";
 import { AttachmentBuilder } from "discord.js";
+import { redactSecrets } from "./secret-scanner.mjs";
 
 export class DiscordOutput {
   constructor(channel) {
@@ -666,10 +613,7 @@ export class DiscordOutput {
     this._flushQueued = false;
   }
 
-  append(text) {
-    this.buffer += text;
-    this._scheduleEdit();
-  }
+  append(text) { this.buffer += text; this._scheduleEdit(); }
 
   async status(text) {
     try {
@@ -686,31 +630,22 @@ export class DiscordOutput {
 
   async finish(epilogue = "") {
     this.finished = true;
-    if (this.editTimer) {
-      clearTimeout(this.editTimer);
-      this.editTimer = null;
-    }
+    if (this.editTimer) { clearTimeout(this.editTimer); this.editTimer = null; }
     if (epilogue) this.buffer += `\n${epilogue}`;
     await this.flush();
   }
 
   async flush() {
     if (!this.buffer) return;
-    if (this._flushing) {
-      this._flushQueued = true;
-      return;
-    }
+    if (this._flushing) { this._flushQueued = true; return; }
     this._flushing = true;
-    const content = this.buffer;
+    const content = redactSecrets(this.buffer).clean;
     this.buffer = "";
 
     try {
       if (content.length <= 1990) {
-        if (this.message) {
-          await this.message.edit(content);
-        } else {
-          this.message = await this.channel.send(content);
-        }
+        if (this.message) await this.message.edit(content);
+        else this.message = await this.channel.send(content);
       } else {
         await this._sendAsAttachment(content);
         this.message = null;
@@ -719,26 +654,19 @@ export class DiscordOutput {
       if (err.code === 10008 || err.code === 50005) {
         this.message = null;
         try {
-          if (content.length <= 1990) {
-            this.message = await this.channel.send(content);
-          } else {
-            await this._sendAsAttachment(content);
-          }
+          if (content.length <= 1990) this.message = await this.channel.send(content);
+          else await this._sendAsAttachment(content);
         } catch { /* give up */ }
       }
     } finally {
       this._flushing = false;
-      if (this._flushQueued) {
-        this._flushQueued = false;
-        await this.flush();
-      }
+      if (this._flushQueued) { this._flushQueued = false; await this.flush(); }
     }
   }
 
   async _sendAsAttachment(content) {
     const attachment = new AttachmentBuilder(Buffer.from(content, "utf-8"), {
-      name: "output.txt",
-      description: "Agent output (too large for a message)",
+      name: "output.txt", description: "Agent output (too large for a message)",
     });
     await this.channel.send({ files: [attachment] });
   }
@@ -759,35 +687,35 @@ HEREDOC_DISCORDOUT
 # ── src/push-approval.mjs ───────────────────────────────────────────────────
 cat > "$APP/src/push-approval.mjs" << 'HEREDOC_PUSH'
 import {
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
+  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
 } from "discord.js";
 import { execSync } from "node:child_process";
+import { redactSecrets } from "./secret-scanner.mjs";
 
 export async function createPushApprovalRequest(channel, workspacePath, command) {
   let diffSummary = "";
   let logSummary = "";
 
   try {
-    diffSummary = execSync("git diff --stat HEAD~1 2>/dev/null || git diff --stat", {
-      cwd: workspacePath, encoding: "utf-8", timeout: 10_000, shell: true,
-    }).slice(0, 900);
+    diffSummary = redactSecrets(
+      execSync("git diff --stat HEAD~1 2>/dev/null || git diff --stat", {
+        cwd: workspacePath, encoding: "utf-8", timeout: 10_000, shell: true,
+      }).slice(0, 900)
+    ).clean;
   } catch { diffSummary = "(diff unavailable)"; }
 
   try {
-    logSummary = execSync("git log --oneline -5", {
-      cwd: workspacePath, encoding: "utf-8", timeout: 5_000,
-    }).slice(0, 500);
+    logSummary = redactSecrets(
+      execSync("git log --oneline -5", {
+        cwd: workspacePath, encoding: "utf-8", timeout: 5_000,
+      }).slice(0, 500)
+    ).clean;
   } catch { logSummary = "(log unavailable)"; }
 
   const embed = new EmbedBuilder()
     .setTitle("\u{1F680} Push Approval Required")
     .setColor(0xff9900)
-    .setDescription(
-      `The agent wants to execute:\n\`\`\`\n${command.slice(0, 200)}\n\`\`\``
-    )
+    .setDescription(`The agent wants to execute:\n\`\`\`\n${command.slice(0, 200)}\n\`\`\``)
     .addFields(
       { name: "Recent Commits", value: `\`\`\`\n${logSummary}\n\`\`\``, inline: false },
       { name: "Diff Summary", value: `\`\`\`\n${diffSummary}\n\`\`\``, inline: false },
@@ -796,14 +724,8 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
     .setTimestamp();
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("push_approve")
-      .setLabel("\u2705 Approve Push")
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId("push_reject")
-      .setLabel("\u274C Reject Push")
-      .setStyle(ButtonStyle.Danger)
+    new ButtonBuilder().setCustomId("push_approve").setLabel("\u2705 Approve Push").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId("push_reject").setLabel("\u274C Reject Push").setStyle(ButtonStyle.Danger)
   );
 
   const msg = await channel.send({ embeds: [embed], components: [row] });
@@ -811,24 +733,17 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
   return new Promise((resolve) => {
     const collector = msg.createMessageComponentCollector({
       filter: (i) => i.customId === "push_approve" || i.customId === "push_reject",
-      max: 1,
-      time: 600_000,
+      max: 1, time: 600_000,
     });
 
     collector.on("collect", async (interaction) => {
       const approved = interaction.customId === "push_approve";
       const label = approved ? "\u2705 Push approved" : "\u274C Push rejected";
       const color = approved ? 0x00cc00 : 0xcc0000;
-
       const updatedEmbed = EmbedBuilder.from(embed)
         .setColor(color)
         .setFooter({ text: `${label} by ${interaction.user.tag}` });
-
-      await interaction.update({
-        embeds: [updatedEmbed],
-        components: [],
-      });
-
+      await interaction.update({ embeds: [updatedEmbed], components: [] });
       resolve({ approved, user: interaction.user.tag });
     });
 
@@ -848,20 +763,47 @@ export async function executePush(channel, workspacePath, command) {
     });
 
     const embed = new EmbedBuilder()
-      .setTitle("\u2705 Push Successful")
-      .setColor(0x00cc00)
+      .setTitle("\u2705 Push Successful").setColor(0x00cc00)
       .setDescription(`\`\`\`\n${(output || "(no output)").slice(0, 1800)}\n\`\`\``)
       .setTimestamp();
 
-    await channel.send({ embeds: [embed] });
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("create_pr").setLabel("\u{1F4DD} Create PR").setStyle(ButtonStyle.Primary)
+    );
+
+    const msg = await channel.send({ embeds: [embed], components: [row] });
+
+    const collector = msg.createMessageComponentCollector({
+      filter: (i) => i.customId === "create_pr", max: 1, time: 600_000,
+    });
+
+    collector.on("collect", async (interaction) => {
+      await interaction.deferUpdate();
+      try {
+        const prOutput = execSync("gh pr create --fill 2>&1", {
+          cwd: workspacePath, encoding: "utf-8", timeout: 30_000, shell: true,
+        });
+        const prEmbed = new EmbedBuilder()
+          .setTitle("\u{1F4DD} PR Created").setColor(0x6e5494)
+          .setDescription(redactSecrets(prOutput.slice(0, 1800)).clean).setTimestamp();
+        await msg.edit({ embeds: [embed, prEmbed], components: [] });
+      } catch (err) {
+        const errEmbed = new EmbedBuilder()
+          .setTitle("\u274C PR Creation Failed").setColor(0xcc0000)
+          .setDescription(`\`\`\`\n${(err.stderr || err.message || "").slice(0, 1000)}\n\`\`\``).setTimestamp();
+        await msg.edit({ embeds: [embed, errEmbed], components: [] });
+      }
+    });
+
+    collector.on("end", (collected) => {
+      if (collected.size === 0) msg.edit({ components: [] }).catch(() => {});
+    });
+
     return { success: true, output };
   } catch (err) {
     const embed = new EmbedBuilder()
-      .setTitle("\u274C Push Failed")
-      .setColor(0xcc0000)
-      .setDescription(`\`\`\`\n${(err.stderr || err.message || "").slice(0, 1800)}\n\`\`\``)
-      .setTimestamp();
-
+      .setTitle("\u274C Push Failed").setColor(0xcc0000)
+      .setDescription(`\`\`\`\n${(err.stderr || err.message || "").slice(0, 1800)}\n\`\`\``).setTimestamp();
     await channel.send({ embeds: [embed] });
     return { success: false, error: err.message };
   }
@@ -873,15 +815,14 @@ cat > "$APP/src/copilot-client.mjs" << 'HEREDOC_COPILOT'
 import { CopilotClient, approveAll } from "@github/copilot-sdk";
 import { evaluateToolUse } from "./policy-engine.mjs";
 import { getActiveGrants } from "./grants.mjs";
+import { createLogger } from "./logger.mjs";
 
+const log = createLogger("copilot");
 let client = null;
 
 export function getCopilotClient() {
   if (!client) {
-    client = new CopilotClient({
-      useStdio: true,
-      autoRestart: true,
-    });
+    client = new CopilotClient({ useStdio: true, autoRestart: true });
   }
   return client;
 }
@@ -911,13 +852,8 @@ export async function createAgentSession(opts) {
     hooks: {
       onPreToolUse: async (input) => {
         const grants = getActiveGrants(channelId);
-        const result = evaluateToolUse(
-          input.toolName, input.toolArgs, workspacePath, grants
-        );
-
-        if (result.decision === "allow") {
-          return { permissionDecision: "allow" };
-        }
+        const result = evaluateToolUse(input.toolName, input.toolArgs, workspacePath, grants);
+        if (result.decision === "allow") return { permissionDecision: "allow" };
 
         if (result.gate === "push") {
           if (onPushRequest) {
@@ -927,9 +863,7 @@ export async function createAgentSession(opts) {
           }
           return {
             permissionDecision: "deny",
-            additionalContext:
-              "Push was denied by the user. Do NOT retry pushing. " +
-              "Inform the user that the push was rejected and ask what to do instead.",
+            additionalContext: "Push was denied. Do NOT retry pushing.",
           };
         }
 
@@ -937,21 +871,15 @@ export async function createAgentSession(opts) {
           if (onOutsideRequest) onOutsideRequest(result.reason);
           return {
             permissionDecision: "deny",
-            additionalContext:
-              `Access denied: ${result.reason}. ` +
-              "The user must grant access via /grant command first. " +
-              "Do NOT retry this operation.",
+            additionalContext: `Access denied: ${result.reason}. Use /grant first.`,
           };
         }
 
-        return {
-          permissionDecision: "deny",
-          additionalContext: result.reason || "Action denied by policy.",
-        };
+        return { permissionDecision: "deny", additionalContext: result.reason || "Denied by policy." };
       },
 
       onErrorOccurred: async (input) => {
-        console.error("[copilot] Error:", input.error, input.errorContext);
+        log.error("Agent error", { error: input.error, context: input.errorContext });
         return { errorHandling: "skip" };
       },
     },
@@ -961,47 +889,28 @@ export async function createAgentSession(opts) {
         `You are an autonomous coding agent working in: ${workspacePath}`,
         "You may freely edit files, run tests, lint, build, and create git branches/commits within the workspace.",
         "IMPORTANT RULES:",
-        "1. You CANNOT git push or publish PRs without explicit user approval — the system will block it.",
-        "2. You CANNOT access files outside the workspace directory without explicit grants.",
+        "1. You CANNOT git push or publish PRs without explicit user approval.",
+        "2. You CANNOT access files outside the workspace without explicit grants.",
         "3. If a push is denied, inform the user and stop retrying.",
-        "4. If file access outside the workspace is denied, tell the user which path you need and ask them to use /grant.",
+        "4. If file access is denied, tell the user which path you need and ask them to use /grant.",
         "5. Always run tests before suggesting a push.",
         "6. Provide clear summaries of what you changed and why.",
       ].join("\n"),
     },
   });
 
-  if (onDelta) {
-    session.on("assistant.message_delta", (event) => {
-      onDelta(event.data?.deltaContent || "");
-    });
-  }
-  if (onToolStart) {
-    session.on("tool.execution_start", (event) => {
-      onToolStart(event.data?.toolName || "unknown");
-    });
-  }
-  if (onToolComplete) {
-    session.on("tool.execution_complete", (event) => {
-      onToolComplete(
-        event.data?.toolName || "unknown",
-        event.data?.success ?? true,
-        event.data?.error
-      );
-    });
-  }
-  if (onIdle) {
-    session.on("session.idle", () => { onIdle(); });
-  }
+  if (onDelta) session.on("assistant.message_delta", (e) => { onDelta(e.data?.deltaContent || ""); });
+  if (onToolStart) session.on("tool.execution_start", (e) => { onToolStart(e.data?.toolName || "unknown"); });
+  if (onToolComplete) session.on("tool.execution_complete", (e) => {
+    onToolComplete(e.data?.toolName || "unknown", e.data?.success ?? true, e.data?.error);
+  });
+  if (onIdle) session.on("session.idle", () => { onIdle(); });
 
   return session;
 }
 
 export async function stopCopilotClient() {
-  if (client) {
-    await client.stop();
-    client = null;
-  }
+  if (client) { await client.stop(); client = null; }
 }
 HEREDOC_COPILOT
 
@@ -1010,7 +919,7 @@ cat > "$APP/src/session-manager.mjs" << 'HEREDOC_SESSION'
 import { execSync } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH } from "./config.mjs";
+import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH, TASK_TIMEOUT_MS } from "./config.mjs";
 import {
   upsertSession, getSession, getAllSessions,
   updateSessionStatus, deleteSession as dbDeleteSession,
@@ -1021,15 +930,14 @@ import { createAgentSession } from "./copilot-client.mjs";
 import { getActiveGrants, restoreGrants, revokeAllGrants } from "./grants.mjs";
 import { DiscordOutput } from "./discord-output.mjs";
 import { createPushApprovalRequest } from "./push-approval.mjs";
+import { createLogger } from "./logger.mjs";
 
+const log = createLogger("session");
 const sessions = new Map();
-
-// ── Workspace Setup ─────────────────────────────────────────────────────────
 
 function createWorktree(channelId) {
   const wsRoot = join(WORKSPACES_ROOT, PROJECT_NAME);
   mkdirSync(wsRoot, { recursive: true });
-
   const worktreePath = join(wsRoot, channelId);
 
   if (existsSync(worktreePath)) {
@@ -1038,194 +946,133 @@ function createWorktree(channelId) {
       branch = execSync("git branch --show-current", {
         cwd: worktreePath, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"],
       }).trim();
-    } catch {
-      branch = `agent/${channelId.slice(-8)}-recovered`;
-    }
+    } catch { branch = `agent/${channelId.slice(-8)}-recovered`; }
     return { workspacePath: worktreePath, branch };
   }
 
   const branchName = `agent/${channelId.slice(-8)}-${Date.now().toString(36)}`;
-
-  try {
-    execSync(`git branch "${branchName}" HEAD`, { cwd: REPO_PATH, stdio: "pipe" });
-  } catch { /* branch may exist */ }
-
+  try { execSync(`git branch "${branchName}" HEAD`, { cwd: REPO_PATH, stdio: "pipe" }); } catch {}
   try {
     execSync(`git worktree add "${worktreePath}" "${branchName}"`, { cwd: REPO_PATH, stdio: "pipe" });
-  } catch (err) {
-    if (!existsSync(worktreePath)) throw err;
-  }
+  } catch (err) { if (!existsSync(worktreePath)) throw err; }
 
   return { workspacePath: worktreePath, branch: branchName };
 }
-
-// ── Session CRUD ────────────────────────────────────────────────────────────
 
 export async function getOrCreateSession(channelId, channel) {
   if (sessions.has(channelId)) return sessions.get(channelId);
 
   const dbRow = getSession(channelId);
   let workspacePath, branch;
-
   if (dbRow && existsSync(dbRow.workspace_path)) {
-    workspacePath = dbRow.workspace_path;
-    branch = dbRow.branch;
+    workspacePath = dbRow.workspace_path; branch = dbRow.branch;
   } else {
     const wt = createWorktree(channelId);
-    workspacePath = wt.workspacePath;
-    branch = wt.branch;
+    workspacePath = wt.workspacePath; branch = wt.branch;
   }
 
   const copilotSession = await createAgentSession({
     channelId, workspacePath,
-
-    onPushRequest: async (command) => {
-      return createPushApprovalRequest(channel, workspacePath, command);
-    },
-
+    onPushRequest: async (command) => createPushApprovalRequest(channel, workspacePath, command),
     onOutsideRequest: (reason) => {
-      channel.send(
-        `\u26D4 **Access Denied**\n${reason}\n\n` +
-        "Use `/grant path:<absolute-path> mode:ro ttl:30` to allow access."
-      ).catch(() => {});
+      channel.send(`\u26D4 **Access Denied**\n${reason}\n\nUse \`/grant path:<path> mode:ro ttl:30\` to allow.`).catch(() => {});
     },
-
-    onDelta: (text) => {
-      sessions.get(channelId)?.output?.append(text);
-    },
-
-    onToolStart: (toolName) => {
-      sessions.get(channelId)?.output?.status(`\u{1F527} \`${toolName}\`\u2026`);
-    },
-
+    onDelta: (text) => { sessions.get(channelId)?.output?.append(text); },
+    onToolStart: (toolName) => { sessions.get(channelId)?.output?.status(`\u{1F527} \`${toolName}\`\u2026`); },
     onToolComplete: (toolName, success, error) => {
       const ctx = sessions.get(channelId);
       const icon = success ? "\u2705" : "\u274C";
       ctx?.output?.status(`${icon} \`${toolName}\`${error ? `: ${error}` : ""}`);
     },
-
     onIdle: () => {
       const ctx = sessions.get(channelId);
-      if (ctx) {
-        ctx.output?.finish("\u2728 **Task complete.**");
-        ctx.status = "idle";
-        updateSessionStatus(channelId, "idle");
-      }
+      if (ctx) { ctx.output?.finish("\u2728 **Task complete.**"); ctx.status = "idle"; updateSessionStatus(channelId, "idle"); }
     },
-
     onUserQuestion: async (question, choices) => {
-      await channel.send(
-        `\u2753 **Agent asks:**\n${question}` +
-        (choices ? `\nOptions: ${choices.join(", ")}` : "")
-      );
+      await channel.send(`\u2753 **Agent asks:**\n${question}${choices ? `\nOptions: ${choices.join(", ")}` : ""}`);
       try {
-        const collected = await channel.awaitMessages({
-          max: 1, time: 300_000,
-          filter: (m) => !m.author.bot,
-        });
+        const collected = await channel.awaitMessages({ max: 1, time: 300_000, filter: (m) => !m.author.bot });
         return collected.first()?.content || "No answer provided.";
-      } catch {
-        return "No answer provided within timeout.";
-      }
+      } catch { return "No answer within timeout."; }
     },
   });
 
   const ctx = {
-    copilotSession, workspacePath, branch,
-    status: "idle", currentTask: null,
-    queue: [], output: null, taskId: null,
+    copilotSession, workspacePath, branch, status: "idle",
+    currentTask: null, queue: [], output: null, taskId: null,
     paused: false, _aborted: false,
   };
-
   sessions.set(channelId, ctx);
   upsertSession(channelId, PROJECT_NAME, workspacePath, branch, "idle");
+  log.info("Session created", { channelId, branch, workspace: workspacePath });
   restoreGrants(channelId);
-
   return ctx;
 }
 
-// ── Task Execution ──────────────────────────────────────────────────────────
-
-export async function enqueueTask(channelId, channel, prompt) {
+export async function enqueueTask(channelId, channel, prompt, outputChannel) {
   const ctx = await getOrCreateSession(channelId, channel);
-
   return new Promise((resolve, reject) => {
-    ctx.queue.push({ prompt, resolve, reject });
+    ctx.queue.push({ prompt, resolve, reject, outputChannel: outputChannel || channel });
     processQueue(channelId, channel);
   });
 }
 
 async function processQueue(channelId, channel) {
   const ctx = sessions.get(channelId);
-  if (!ctx || ctx.status === "working" || ctx.paused) return;
-  if (ctx.queue.length === 0) return;
+  if (!ctx || ctx.status === "working" || ctx.paused || ctx.queue.length === 0) return;
 
-  const { prompt, resolve, reject } = ctx.queue.shift();
-
+  const { prompt, resolve, reject, outputChannel } = ctx.queue.shift();
   ctx.status = "working";
   updateSessionStatus(channelId, "working");
-  ctx.output = new DiscordOutput(channel);
+  ctx.output = new DiscordOutput(outputChannel);
   ctx.taskId = insertTask(channelId, prompt);
+  log.info("Task started", { channelId, taskId: ctx.taskId, prompt: prompt.slice(0, 100) });
 
   try {
-    const response = await ctx.copilotSession.sendAndWait({ prompt });
+    const timeout = new Promise((_, rej) => { const t = setTimeout(() => rej(new Error("Task timed out")), TASK_TIMEOUT_MS); t.unref(); });
+    const response = await Promise.race([ctx.copilotSession.sendAndWait({ prompt }), timeout]);
     completeTask(ctx.taskId, "completed");
-    ctx.status = "idle";
-    updateSessionStatus(channelId, "idle");
+    log.info("Task completed", { channelId, taskId: ctx.taskId });
+    ctx.status = "idle"; updateSessionStatus(channelId, "idle");
     resolve(response);
   } catch (err) {
-    if (ctx._aborted) {
-      ctx._aborted = false;
+    if (ctx._aborted) { ctx._aborted = false; }
+    else if (err.message === "Task timed out") {
+      log.warn("Task timed out", { channelId, taskId: ctx.taskId, timeoutMs: TASK_TIMEOUT_MS });
+      ctx._aborted = true;
+      try { ctx.copilotSession.abort(); } catch {}
+      completeTask(ctx.taskId, "aborted");
+      ctx.output?.finish(`\u23F1 **Task timed out** after ${Math.round(TASK_TIMEOUT_MS / 60_000)} min.`);
+      ctx.status = "idle"; updateSessionStatus(channelId, "idle");
     } else {
       completeTask(ctx.taskId, "failed");
-      ctx.status = "idle";
-      updateSessionStatus(channelId, "idle");
+      ctx.status = "idle"; updateSessionStatus(channelId, "idle");
       ctx.output?.finish(`\u274C **Error:** ${err.message}`);
     }
     reject(err);
   } finally {
     ctx.output = null;
-    if (!ctx.paused) {
-      processQueue(channelId, channel);
-    }
+    if (!ctx.paused) processQueue(channelId, channel);
   }
 }
-
-// ── Approve Push ────────────────────────────────────────────────────────────
 
 export async function approvePendingPush(channelId, channel) {
   const ctx = sessions.get(channelId);
   if (!ctx) return { found: false };
-  await channel.send(
-    "\u2139\uFE0F Use the **Approve Push** button on the push request message, " +
-    "or wait for the next push attempt."
-  );
+  await channel.send("\u2139\uFE0F Use the **Approve Push** button on the push request message.");
   return { found: true };
 }
-
-// ── Status ──────────────────────────────────────────────────────────────────
 
 export function getSessionStatus(channelId) {
   const ctx = sessions.get(channelId);
   if (!ctx) return null;
-
   const grants = getActiveGrants(channelId);
   const grantList = [];
   for (const [p, g] of grants) {
-    grantList.push({
-      path: p, mode: g.mode,
-      expiresIn: Math.max(0, Math.round((g.expiry - Date.now()) / 60_000)),
-    });
+    grantList.push({ path: p, mode: g.mode, expiresIn: Math.max(0, Math.round((g.expiry - Date.now()) / 60_000)) });
   }
-
-  return {
-    status: ctx.status, paused: ctx.paused,
-    workspace: ctx.workspacePath, branch: ctx.branch,
-    queueLength: ctx.queue.length, grants: grantList,
-  };
+  return { status: ctx.status, paused: ctx.paused, workspace: ctx.workspacePath, branch: ctx.branch, queueLength: ctx.queue.length, grants: grantList };
 }
-
-// ── Reset ───────────────────────────────────────────────────────────────────
 
 export async function resetSession(channelId) {
   const ctx = sessions.get(channelId);
@@ -1238,44 +1085,31 @@ export async function resetSession(channelId) {
   dbDeleteSession(channelId);
 }
 
-// ── Hard Stop ───────────────────────────────────────────────────────────────
-
 export function hardStop(channelId, clearQueue = true) {
   const ctx = sessions.get(channelId);
   if (!ctx) return { found: false };
-
   const wasWorking = ctx.status === "working";
   let queueCleared = 0;
-
   if (wasWorking) {
     ctx._aborted = true;
     try { ctx.copilotSession.abort(); } catch {}
-    if (ctx.taskId) {
-      completeTask(ctx.taskId, "aborted");
-      ctx.taskId = null;
-    }
+    if (ctx.taskId) { completeTask(ctx.taskId, "aborted"); ctx.taskId = null; }
     ctx.output?.finish("\u{1F6D1} **Task aborted by user.**");
-    ctx.output = null;
-    ctx.status = "idle";
-    updateSessionStatus(channelId, "idle");
+    ctx.output = null; ctx.status = "idle"; updateSessionStatus(channelId, "idle");
   }
-
   if (clearQueue && ctx.queue.length > 0) {
     queueCleared = ctx.queue.length;
     for (const item of ctx.queue) item.reject(new Error("Cleared by /stop"));
     ctx.queue = [];
   }
-
   return { found: true, wasWorking, queueCleared };
 }
-
-// ── Pause / Resume ──────────────────────────────────────────────────────────
 
 export function pauseSession(channelId) {
   const ctx = sessions.get(channelId);
   if (!ctx) return { found: false };
   ctx.paused = true;
-  return { found: true, wasAlreadyPaused: false };
+  return { found: true };
 }
 
 export function resumeSession(channelId, channel) {
@@ -1286,8 +1120,6 @@ export function resumeSession(channelId, channel) {
   if (wasPaused && ctx.queue.length > 0) processQueue(channelId, channel);
   return { found: true, wasPaused };
 }
-
-// ── Queue Management ────────────────────────────────────────────────────────
 
 export function clearQueue(channelId) {
   const ctx = sessions.get(channelId);
@@ -1301,183 +1133,131 @@ export function clearQueue(channelId) {
 export function getQueueInfo(channelId) {
   const ctx = sessions.get(channelId);
   if (!ctx) return null;
-  return {
-    paused: ctx.paused,
-    length: ctx.queue.length,
-    items: ctx.queue.map((q, i) => ({ index: i + 1, prompt: q.prompt.slice(0, 100) })),
-  };
+  return { paused: ctx.paused, length: ctx.queue.length, items: ctx.queue.map((q, i) => ({ index: i + 1, prompt: q.prompt.slice(0, 100) })) };
 }
 
-// ── Task History ────────────────────────────────────────────────────────────
-
-export function getTaskHistory(channelId, limit = 10) {
-  return dbGetTaskHistory(channelId, limit);
-}
-
-// ── Restore ─────────────────────────────────────────────────────────────────
-
-export function getStoredSessions() {
-  return getAllSessions();
-}
+export function getTaskHistory(channelId, limit = 10) { return dbGetTaskHistory(channelId, limit); }
+export function getStoredSessions() { return getAllSessions(); }
 HEREDOC_SESSION
 
 # ── src/bot.mjs ──────────────────────────────────────────────────────────────
 cat > "$APP/src/bot.mjs" << 'HEREDOC_BOT'
 import {
   Client, GatewayIntentBits, REST, Routes,
-  SlashCommandBuilder, EmbedBuilder,
+  SlashCommandBuilder, EmbedBuilder, AttachmentBuilder,
 } from "discord.js";
-
 import {
   DISCORD_TOKEN, ALLOWED_GUILDS, ALLOWED_CHANNELS,
-  ADMIN_ROLE_IDS, PROJECT_NAME,
-  DISCORD_EDIT_THROTTLE_MS, DEFAULT_GRANT_MODE, DEFAULT_GRANT_TTL_MIN,
+  ADMIN_ROLE_IDS, PROJECT_NAME, DISCORD_EDIT_THROTTLE_MS,
+  DEFAULT_GRANT_MODE, DEFAULT_GRANT_TTL_MIN,
   BASE_ROOT, WORKSPACES_ROOT, REPO_PATH,
+  RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX,
 } from "./config.mjs";
-
 import {
-  enqueueTask, getSessionStatus,
-  approvePendingPush, resetSession,
-  hardStop, pauseSession, resumeSession,
-  clearQueue, getQueueInfo, getTaskHistory,
+  enqueueTask, getSessionStatus, approvePendingPush, resetSession,
+  hardStop, pauseSession, resumeSession, clearQueue, getQueueInfo, getTaskHistory,
 } from "./session-manager.mjs";
-
 import { addGrant, revokeGrant, startGrantCleanup, restoreGrants } from "./grants.mjs";
 import { closeDb, getAllSessions } from "./state.mjs";
 import { stopCopilotClient } from "./copilot-client.mjs";
+import { redactSecrets } from "./secret-scanner.mjs";
+import { createLogger } from "./logger.mjs";
+import { execSync } from "node:child_process";
 
-// ── Slash Commands ──────────────────────────────────────────────────────────
+const log = createLogger("bot");
 
 const commands = [
-  new SlashCommandBuilder()
-    .setName("task")
-    .setDescription("Send a task to the coding agent")
-    .addStringOption((o) =>
-      o.setName("prompt").setDescription("Task description").setRequired(true)
-    ),
-  new SlashCommandBuilder()
-    .setName("status")
-    .setDescription("Show current agent session status"),
-  new SlashCommandBuilder()
-    .setName("approve_push")
-    .setDescription("Approve a pending git push"),
-  new SlashCommandBuilder()
-    .setName("grant")
-    .setDescription("Grant agent access to a path outside workspace")
-    .addStringOption((o) =>
-      o.setName("path").setDescription("Absolute path to grant").setRequired(true)
-    )
-    .addStringOption((o) =>
-      o.setName("mode").setDescription("Access mode")
-        .addChoices({ name: "Read Only", value: "ro" }, { name: "Read/Write", value: "rw" })
-    )
-    .addIntegerOption((o) =>
-      o.setName("ttl").setDescription("Time-to-live in minutes (default: 30)")
-        .setMinValue(1).setMaxValue(1440)
-    ),
-  new SlashCommandBuilder()
-    .setName("revoke")
-    .setDescription("Revoke agent access to a path")
-    .addStringOption((o) =>
-      o.setName("path").setDescription("Absolute path to revoke").setRequired(true)
-    ),
-  new SlashCommandBuilder()
-    .setName("reset")
-    .setDescription("Reset the agent session for this channel"),
-  new SlashCommandBuilder()
-    .setName("stop")
-    .setDescription("Hard stop \u2014 abort the running task immediately")
-    .addBooleanOption((o) =>
-      o.setName("clear_queue").setDescription("Also clear all pending tasks (default: true)")
-    ),
-  new SlashCommandBuilder()
-    .setName("pause")
-    .setDescription("Pause queue processing (current task finishes, no new ones start)"),
-  new SlashCommandBuilder()
-    .setName("resume")
-    .setDescription("Resume queue processing after a pause"),
-  new SlashCommandBuilder()
-    .setName("queue")
-    .setDescription("View or manage the task queue")
-    .addStringOption((o) =>
-      o.setName("action").setDescription("What to do")
-        .addChoices({ name: "List pending tasks", value: "list" }, { name: "Clear all pending tasks", value: "clear" })
-    ),
-  new SlashCommandBuilder()
-    .setName("history")
-    .setDescription("Show recent task history")
-    .addIntegerOption((o) =>
-      o.setName("limit").setDescription("Number of tasks to show (default: 10)")
-        .setMinValue(1).setMaxValue(50)
-    ),
-  new SlashCommandBuilder()
-    .setName("config")
-    .setDescription("View current bot configuration"),
+  new SlashCommandBuilder().setName("task").setDescription("Send a task to the coding agent")
+    .addStringOption((o) => o.setName("prompt").setDescription("Task description").setRequired(true)),
+  new SlashCommandBuilder().setName("status").setDescription("Show current agent session status"),
+  new SlashCommandBuilder().setName("approve_push").setDescription("Approve a pending git push"),
+  new SlashCommandBuilder().setName("grant").setDescription("Grant agent access to a path outside workspace")
+    .addStringOption((o) => o.setName("path").setDescription("Absolute path to grant").setRequired(true))
+    .addStringOption((o) => o.setName("mode").setDescription("Access mode").addChoices({ name: "Read Only", value: "ro" }, { name: "Read/Write", value: "rw" }))
+    .addIntegerOption((o) => o.setName("ttl").setDescription("TTL in minutes (default: 30)").setMinValue(1).setMaxValue(1440)),
+  new SlashCommandBuilder().setName("revoke").setDescription("Revoke agent access to a path")
+    .addStringOption((o) => o.setName("path").setDescription("Absolute path to revoke").setRequired(true)),
+  new SlashCommandBuilder().setName("reset").setDescription("Reset the agent session for this channel"),
+  new SlashCommandBuilder().setName("stop").setDescription("Hard stop \u2014 abort the running task immediately")
+    .addBooleanOption((o) => o.setName("clear_queue").setDescription("Also clear all pending tasks (default: true)")),
+  new SlashCommandBuilder().setName("pause").setDescription("Pause queue processing"),
+  new SlashCommandBuilder().setName("resume").setDescription("Resume queue processing after a pause"),
+  new SlashCommandBuilder().setName("queue").setDescription("View or manage the task queue")
+    .addStringOption((o) => o.setName("action").setDescription("What to do").addChoices({ name: "List", value: "list" }, { name: "Clear", value: "clear" })),
+  new SlashCommandBuilder().setName("history").setDescription("Show recent task history")
+    .addIntegerOption((o) => o.setName("limit").setDescription("Number of tasks (default: 10)").setMinValue(1).setMaxValue(50)),
+  new SlashCommandBuilder().setName("config").setDescription("View current bot configuration"),
+  new SlashCommandBuilder().setName("diff").setDescription("Show git diff for the agent workspace")
+    .addStringOption((o) => o.setName("mode").setDescription("Diff mode").addChoices({ name: "Summary (stat)", value: "stat" }, { name: "Full diff", value: "full" }, { name: "Staged only", value: "staged" })),
+  new SlashCommandBuilder().setName("branch").setDescription("Manage agent branches")
+    .addStringOption((o) => o.setName("action").setDescription("What to do").addChoices({ name: "List branches", value: "list" }, { name: "Show current", value: "current" }, { name: "Create new", value: "create" }, { name: "Switch", value: "switch" }))
+    .addStringOption((o) => o.setName("name").setDescription("Branch name (for create/switch)")),
 ];
-
-// ── Access Control ──────────────────────────────────────────────────────────
 
 function isAllowed(interaction) {
   if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(interaction.guildId)) return false;
   if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(interaction.channelId)) return false;
   if (ADMIN_ROLE_IDS) {
-    const memberRoles = interaction.member?.roles?.cache;
-    if (memberRoles) {
-      const hasRole = [...ADMIN_ROLE_IDS].some((id) => memberRoles.has(id));
-      if (!hasRole) return false;
-    }
+    const roles = interaction.member?.roles?.cache;
+    if (roles && ![...ADMIN_ROLE_IDS].some((id) => roles.has(id))) return false;
   }
   return true;
 }
 
-// ── Register Commands ───────────────────────────────────────────────────────
+function isAdmin(interaction) {
+  if (!ADMIN_ROLE_IDS) return true;
+  const roles = interaction.member?.roles?.cache;
+  return roles ? [...ADMIN_ROLE_IDS].some((id) => roles.has(id)) : false;
+}
+
+const rateLimitMap = new Map();
+function isRateLimited(interaction) {
+  if (isAdmin(interaction)) return false;
+  const userId = interaction.user.id;
+  const now = Date.now();
+  let ts = rateLimitMap.get(userId);
+  if (!ts) { ts = []; rateLimitMap.set(userId, ts); }
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  while (ts.length > 0 && ts[0] <= cutoff) ts.shift();
+  if (ts.length >= RATE_LIMIT_MAX) return true;
+  ts.push(now);
+  return false;
+}
 
 async function registerCommands(clientId) {
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
   const body = commands.map((c) => c.toJSON());
-
   if (ALLOWED_GUILDS && ALLOWED_GUILDS.size > 0) {
     for (const guildId of ALLOWED_GUILDS) {
       await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body });
-      console.log(`[discord] Registered commands in guild ${guildId}`);
+      log.info("Registered commands", { guildId });
     }
   } else {
     await rest.put(Routes.applicationCommands(clientId), { body });
-    console.log("[discord] Registered global slash commands");
+    log.info("Registered global commands");
   }
 }
 
-// ── Client ──────────────────────────────────────────────────────────────────
-
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
 client.once("ready", async () => {
-  console.log(`[discord] Logged in as ${client.user.tag}`);
-  try {
-    await registerCommands(client.user.id);
-  } catch (err) {
-    console.error("[discord] Failed to register slash commands:", err.message);
-    console.error("[discord] Bot will continue, but commands may not appear.");
+  log.info("Logged in", { tag: client.user.tag });
+  try { await registerCommands(client.user.id); } catch (err) {
+    log.error("Failed to register commands", { error: err.message });
   }
   startGrantCleanup();
   for (const row of getAllSessions()) restoreGrants(row.channel_id);
-  console.log(`[discord] Bot ready \u2014 project: ${PROJECT_NAME}`);
+  log.info("Bot ready", { project: PROJECT_NAME });
 });
-
-// ── Interaction Handler ─────────────────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand() && !interaction.isButton()) return;
   if (interaction.isButton()) return;
-
-  if (!isAllowed(interaction)) {
-    await interaction.reply({ content: "\u26D4 No permission.", ephemeral: true });
+  if (!isAllowed(interaction)) { await interaction.reply({ content: "\u26D4 No permission.", ephemeral: true }); return; }
+  if (isRateLimited(interaction)) {
+    await interaction.reply({ content: `\u23F3 Rate limited. Max ${RATE_LIMIT_MAX} commands per ${Math.round(RATE_LIMIT_WINDOW_MS / 1000)}s.`, ephemeral: true });
     return;
   }
 
@@ -1489,198 +1269,182 @@ client.on("interactionCreate", async (interaction) => {
       case "task": {
         const prompt = interaction.options.getString("prompt");
         await interaction.reply(`\u{1F4CB} **Task queued:** ${prompt}`);
-        enqueueTask(channelId, channel, prompt).catch((err) => {
-          channel.send(`\u274C **Task failed:** ${err.message}`).catch(() => {});
+        const reply = await interaction.fetchReply();
+        const thread = await reply.startThread({ name: `Task: ${prompt.slice(0, 90)}`, autoArchiveDuration: 1440 });
+        enqueueTask(channelId, channel, prompt, thread).catch((err) => {
+          thread.send(`\u274C **Task failed:** ${err.message}`).catch(() => {});
         });
         break;
       }
-
       case "status": {
         const st = getSessionStatus(channelId);
-        if (!st) {
-          await interaction.reply({ content: "No active session. Use `/task` first.", ephemeral: true });
-          break;
-        }
-        const grantLines = st.grants.length
-          ? st.grants.map((g) => `\`${g.path}\` (${g.mode}, ${g.expiresIn}min left)`).join("\n")
-          : "None";
-        const embed = new EmbedBuilder()
-          .setTitle("\u{1F4CA} Agent Status")
-          .setColor(st.paused ? 0xff6600 : st.status === "working" ? 0x3498db : st.status === "idle" ? 0x2ecc71 : 0xff9900)
+        if (!st) { await interaction.reply({ content: "No active session.", ephemeral: true }); break; }
+        const grantLines = st.grants.length ? st.grants.map((g) => `\`${g.path}\` (${g.mode}, ${g.expiresIn}min)`).join("\n") : "None";
+        const embed = new EmbedBuilder().setTitle("\u{1F4CA} Agent Status")
+          .setColor(st.paused ? 0xff6600 : st.status === "working" ? 0x3498db : 0x2ecc71)
           .addFields(
             { name: "Status", value: st.paused ? `${st.status} (\u23F8 paused)` : st.status, inline: true },
             { name: "Branch", value: st.branch, inline: true },
             { name: "Queue", value: `${st.queueLength} pending`, inline: true },
             { name: "Workspace", value: `\`${st.workspace}\``, inline: false },
             { name: "Active Grants", value: grantLines, inline: false },
-          )
-          .setTimestamp();
+          ).setTimestamp();
         await interaction.reply({ embeds: [embed] });
         break;
       }
-
       case "approve_push": {
         await interaction.deferReply();
         const res = await approvePendingPush(channelId, channel);
         await interaction.editReply(res.found ? "\u2705 Push approval noted." : "No active session.");
         break;
       }
-
       case "grant": {
         const grantPath = interaction.options.getString("path");
         const mode = interaction.options.getString("mode") || "ro";
         const ttl = interaction.options.getInteger("ttl") || 30;
         if (!grantPath.startsWith("/") && !/^[A-Z]:\\/i.test(grantPath)) {
-          await interaction.reply({ content: "\u26A0\uFE0F Path must be absolute.", ephemeral: true });
-          break;
+          await interaction.reply({ content: "\u26A0\uFE0F Path must be absolute.", ephemeral: true }); break;
         }
         const result = addGrant(channelId, grantPath, mode, ttl);
         const ts = Math.floor(new Date(result.expiresAt).getTime() / 1000);
-        await interaction.reply(
-          `\u2705 **Granted** \`${mode}\` access to \`${grantPath}\` for **${ttl} min** (expires <t:${ts}:R>).`
-        );
+        await interaction.reply(`\u2705 **Granted** \`${mode}\` access to \`${grantPath}\` for **${ttl} min** (expires <t:${ts}:R>).`);
         break;
       }
-
       case "revoke": {
-        const path = interaction.options.getString("path");
-        revokeGrant(channelId, path);
-        await interaction.reply(`\u{1F512} **Revoked** access to \`${path}\`.`);
+        revokeGrant(channelId, interaction.options.getString("path"));
+        await interaction.reply(`\u{1F512} **Revoked** access to \`${interaction.options.getString("path")}\`.`);
         break;
       }
-
       case "reset": {
         await interaction.deferReply();
         await resetSession(channelId);
-        await interaction.editReply("\u{1F504} Session reset. Use `/task` to start a new one.");
+        await interaction.editReply("\u{1F504} Session reset.");
         break;
       }
-
       case "stop": {
         const clearQ = interaction.options.getBoolean("clear_queue") ?? true;
         const result = hardStop(channelId, clearQ);
-        if (!result.found) {
-          await interaction.reply({ content: "No active session to stop.", ephemeral: true });
-          break;
-        }
-        const parts = [];
-        if (result.wasWorking) parts.push("Aborted running task");
-        else parts.push("No task was running");
-        if (result.queueCleared > 0) parts.push(`cleared ${result.queueCleared} queued task(s)`);
+        if (!result.found) { await interaction.reply({ content: "No active session.", ephemeral: true }); break; }
+        const parts = [result.wasWorking ? "Aborted running task" : "No task running"];
+        if (result.queueCleared > 0) parts.push(`cleared ${result.queueCleared} queued`);
         await interaction.reply(`\u{1F6D1} **Stopped.** ${parts.join(", ")}.`);
         break;
       }
-
       case "pause": {
         const result = pauseSession(channelId);
-        if (!result.found) {
-          await interaction.reply({ content: "No active session to pause.", ephemeral: true });
-          break;
-        }
-        await interaction.reply(
-          "\u23F8 **Queue paused.** Current task (if any) will finish, but no new tasks will start.\n" +
-          "Use `/resume` to continue or `/stop` to abort the running task."
-        );
+        if (!result.found) { await interaction.reply({ content: "No active session.", ephemeral: true }); break; }
+        await interaction.reply("\u23F8 **Queue paused.** Use `/resume` or `/stop`.");
         break;
       }
-
       case "resume": {
         const result = resumeSession(channelId, channel);
-        if (!result.found) {
-          await interaction.reply({ content: "No active session to resume.", ephemeral: true });
-          break;
-        }
-        if (!result.wasPaused) {
-          await interaction.reply({ content: "Session was not paused.", ephemeral: true });
-          break;
-        }
-        await interaction.reply("\u25B6\uFE0F **Queue resumed.** Pending tasks will now be processed.");
+        if (!result.found) { await interaction.reply({ content: "No active session.", ephemeral: true }); break; }
+        if (!result.wasPaused) { await interaction.reply({ content: "Not paused.", ephemeral: true }); break; }
+        await interaction.reply("\u25B6\uFE0F **Queue resumed.**");
         break;
       }
-
       case "queue": {
         const action = interaction.options.getString("action") || "list";
         if (action === "clear") {
           const result = clearQueue(channelId);
-          if (!result.found) {
-            await interaction.reply({ content: "No active session.", ephemeral: true });
-            break;
-          }
-          await interaction.reply(
-            result.cleared > 0 ? `\u{1F5D1} Cleared **${result.cleared}** pending task(s).` : "Queue was already empty."
-          );
+          if (!result.found) { await interaction.reply({ content: "No active session.", ephemeral: true }); break; }
+          await interaction.reply(result.cleared > 0 ? `\u{1F5D1} Cleared **${result.cleared}** task(s).` : "Queue empty.");
           break;
         }
         const info = getQueueInfo(channelId);
-        if (!info) {
-          await interaction.reply({ content: "No active session. Use `/task` first.", ephemeral: true });
-          break;
-        }
-        if (info.length === 0) {
-          await interaction.reply({ content: `Queue is empty.${info.paused ? " *(paused)*" : ""}`, ephemeral: true });
-          break;
-        }
-        const lines = info.items.map(
-          (item) => `**${item.index}.** ${item.prompt}${item.prompt.length >= 100 ? "\u2026" : ""}`
-        );
-        const embed = new EmbedBuilder()
-          .setTitle(`\u{1F4CB} Task Queue (${info.length} pending)`)
-          .setColor(info.paused ? 0xff6600 : 0x3498db)
-          .setDescription(lines.join("\n"))
-          .setFooter({ text: info.paused ? "\u23F8 Queue is paused" : "Queue is active" });
+        if (!info) { await interaction.reply({ content: "No active session.", ephemeral: true }); break; }
+        if (info.length === 0) { await interaction.reply({ content: "Queue empty.", ephemeral: true }); break; }
+        const lines = info.items.map((i) => `**${i.index}.** ${i.prompt}`);
+        const embed = new EmbedBuilder().setTitle(`\u{1F4CB} Queue (${info.length})`)
+          .setColor(info.paused ? 0xff6600 : 0x3498db).setDescription(lines.join("\n"))
+          .setFooter({ text: info.paused ? "\u23F8 Paused" : "Active" });
         await interaction.reply({ embeds: [embed] });
         break;
       }
-
       case "history": {
         const limit = interaction.options.getInteger("limit") || 10;
         const tasks = getTaskHistory(channelId, limit);
-        if (tasks.length === 0) {
-          await interaction.reply({ content: "No task history for this channel.", ephemeral: true });
-          break;
-        }
-        const statusIcon = { completed: "\u2705", failed: "\u274C", running: "\u23F3", aborted: "\u{1F6D1}" };
-        const lns = tasks.map((t) => {
-          const icon = statusIcon[t.status] || "\u2754";
-          const pr = t.prompt.length > 60 ? t.prompt.slice(0, 60) + "\u2026" : t.prompt;
+        if (!tasks.length) { await interaction.reply({ content: "No history.", ephemeral: true }); break; }
+        const icons = { completed: "\u2705", failed: "\u274C", running: "\u23F3", aborted: "\u{1F6D1}" };
+        const lines = tasks.map((t) => {
+          const p = t.prompt.length > 60 ? t.prompt.slice(0, 60) + "\u2026" : t.prompt;
           const time = t.started_at ? `<t:${Math.floor(new Date(t.started_at + "Z").getTime() / 1000)}:R>` : "";
-          return `${icon} ${pr} ${time}`;
+          return `${icons[t.status] || "\u2754"} ${p} ${time}`;
         });
-        const embed = new EmbedBuilder()
-          .setTitle(`\u{1F4DC} Task History (last ${tasks.length})`)
-          .setColor(0x9b59b6)
-          .setDescription(lns.join("\n"))
-          .setTimestamp();
+        const embed = new EmbedBuilder().setTitle(`\u{1F4DC} History (${tasks.length})`)
+          .setColor(0x9b59b6).setDescription(lines.join("\n")).setTimestamp();
         await interaction.reply({ embeds: [embed] });
         break;
       }
-
       case "config": {
-        const embed = new EmbedBuilder()
-          .setTitle("\u2699\uFE0F Bot Configuration")
-          .setColor(0x95a5a6)
+        const embed = new EmbedBuilder().setTitle("\u2699\uFE0F Config").setColor(0x95a5a6)
           .addFields(
             { name: "Project", value: PROJECT_NAME, inline: true },
-            { name: "Repo Path", value: `\`${REPO_PATH}\``, inline: true },
-            { name: "Base Root", value: `\`${BASE_ROOT}\``, inline: false },
-            { name: "Workspaces Root", value: `\`${WORKSPACES_ROOT}\``, inline: false },
-            { name: "Edit Throttle", value: `${DISCORD_EDIT_THROTTLE_MS} ms`, inline: true },
-            { name: "Default Grant Mode", value: DEFAULT_GRANT_MODE, inline: true },
-            { name: "Default Grant TTL", value: `${DEFAULT_GRANT_TTL_MIN} min`, inline: true },
-            { name: "Guild Filter", value: ALLOWED_GUILDS ? [...ALLOWED_GUILDS].join(", ") : "*(all)*", inline: false },
-            { name: "Channel Filter", value: ALLOWED_CHANNELS ? [...ALLOWED_CHANNELS].join(", ") : "*(all)*", inline: false },
-            { name: "Admin Roles", value: ADMIN_ROLE_IDS ? [...ADMIN_ROLE_IDS].join(", ") : "*(none \u2014 all allowed)*", inline: false },
-          )
-          .setTimestamp();
+            { name: "Repo", value: `\`${REPO_PATH}\``, inline: true },
+            { name: "Base", value: `\`${BASE_ROOT}\``, inline: false },
+            { name: "Workspaces", value: `\`${WORKSPACES_ROOT}\``, inline: false },
+            { name: "Edit Throttle", value: `${DISCORD_EDIT_THROTTLE_MS}ms`, inline: true },
+            { name: "Grant Mode", value: DEFAULT_GRANT_MODE, inline: true },
+            { name: "Grant TTL", value: `${DEFAULT_GRANT_TTL_MIN}min`, inline: true },
+            { name: "Guilds", value: ALLOWED_GUILDS ? [...ALLOWED_GUILDS].join(", ") : "*(all)*", inline: false },
+            { name: "Channels", value: ALLOWED_CHANNELS ? [...ALLOWED_CHANNELS].join(", ") : "*(all)*", inline: false },
+            { name: "Admins", value: ADMIN_ROLE_IDS ? [...ADMIN_ROLE_IDS].join(", ") : "*(all)*", inline: false },
+          ).setTimestamp();
         await interaction.reply({ embeds: [embed], ephemeral: true });
         break;
       }
-
-      default:
-        await interaction.reply({ content: "Unknown command.", ephemeral: true });
+      case "diff": {
+        const st = getSessionStatus(channelId);
+        if (!st) { await interaction.reply({ content: "No active session.", ephemeral: true }); break; }
+        const mode = interaction.options.getString("mode") || "stat";
+        const gitCmd = mode === "stat" ? "git diff --stat" : mode === "staged" ? "git diff --cached" : "git diff";
+        await interaction.deferReply();
+        try {
+          const output = execSync(gitCmd, { cwd: st.workspace, encoding: "utf-8", timeout: 15_000 });
+          if (!output.trim()) { await interaction.editReply("No changes."); break; }
+          const clean = redactSecrets(output).clean;
+          if (clean.length <= 1900) await interaction.editReply(`\`\`\`diff\n${clean}\n\`\`\``);
+          else {
+            const att = new AttachmentBuilder(Buffer.from(clean, "utf-8"), { name: "diff.txt" });
+            await interaction.editReply({ files: [att] });
+          }
+        } catch (err) { await interaction.editReply(`\u274C \`${gitCmd}\` failed: ${err.message}`); }
+        break;
+      }
+      case "branch": {
+        const st = getSessionStatus(channelId);
+        if (!st) { await interaction.reply({ content: "No active session.", ephemeral: true }); break; }
+        const action = interaction.options.getString("action") || "current";
+        const branchName = interaction.options.getString("name");
+        if (action === "current") { await interaction.reply(`Branch: \`${st.branch}\``); break; }
+        if (action === "list") {
+          try {
+            const b = execSync("git branch --list", { cwd: st.workspace, encoding: "utf-8", timeout: 5_000 }).trim();
+            await interaction.reply(`\`\`\`\n${b}\n\`\`\``);
+          } catch (err) { await interaction.reply(`\u274C ${err.message}`); }
+          break;
+        }
+        if (!branchName) { await interaction.reply({ content: `Provide a branch name for \`${action}\`.`, ephemeral: true }); break; }
+        if (st.status === "working") { await interaction.reply({ content: "\u26A0\uFE0F Stop task first.", ephemeral: true }); break; }
+        await interaction.deferReply();
+        if (action === "create") {
+          try { execSync(`git checkout -b "${branchName}"`, { cwd: st.workspace, encoding: "utf-8", timeout: 10_000 });
+            await interaction.editReply(`\u2705 Created \`${branchName}\`.`);
+          } catch (err) { await interaction.editReply(`\u274C ${err.message}`); }
+          break;
+        }
+        if (action === "switch") {
+          try { execSync(`git checkout "${branchName}"`, { cwd: st.workspace, encoding: "utf-8", timeout: 10_000 });
+            await interaction.editReply(`\u2705 Switched to \`${branchName}\`.`);
+          } catch (err) { await interaction.editReply(`\u274C ${err.message}`); }
+          break;
+        }
+        break;
+      }
+      default: await interaction.reply({ content: "Unknown command.", ephemeral: true });
     }
   } catch (err) {
-    console.error(`[discord] Command error (${commandName}):`, err);
+    log.error("Command error", { command: commandName, error: err.message });
     const reply = interaction.deferred || interaction.replied
       ? (msg) => interaction.editReply(msg)
       : (msg) => interaction.reply({ content: msg, ephemeral: true });
@@ -1688,10 +1452,23 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// ── Shutdown ────────────────────────────────────────────────────────────────
+client.on("messageCreate", async (message) => {
+  if (message.author.bot || !message.channel.isThread()) return;
+  const parent = message.channel.parent;
+  if (!parent) return;
+  const parentId = parent.id;
+  if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(parentId)) return;
+  if (message.channel.ownerId !== client.user.id) return;
+  const prompt = message.content.trim();
+  if (!prompt) return;
+  log.info("Follow-up in thread", { channelId: parentId, threadId: message.channel.id });
+  enqueueTask(parentId, parent, prompt, message.channel).catch((err) => {
+    message.channel.send(`\u274C **Follow-up failed:** ${err.message}`).catch(() => {});
+  });
+});
 
 async function shutdown(signal) {
-  console.log(`\n[bot] Received ${signal}, shutting down\u2026`);
+  log.info("Shutting down", { signal });
   client.destroy();
   await stopCopilotClient();
   closeDb();
@@ -1700,11 +1477,9 @@ async function shutdown(signal) {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("unhandledRejection", (err) => {
-  console.error("[bot] Unhandled rejection:", err);
-});
+process.on("unhandledRejection", (err) => { log.error("Unhandled rejection", { error: err?.message || String(err) }); });
 
-console.log("[bot] Starting Discord bot\u2026");
+log.info("Starting Discord bot");
 client.login(DISCORD_TOKEN);
 HEREDOC_BOT
 

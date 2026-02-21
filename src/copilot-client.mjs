@@ -1,6 +1,9 @@
 import { CopilotClient, approveAll } from "@github/copilot-sdk";
 import { evaluateToolUse } from "./policy-engine.mjs";
 import { getActiveGrants } from "./grants.mjs";
+import { createLogger } from "./logger.mjs";
+
+const log = createLogger("copilot");
 
 let client = null;
 
@@ -116,7 +119,7 @@ export async function createAgentSession(opts) {
       },
 
       onErrorOccurred: async (input) => {
-        console.error("[copilot] Error:", input.error, input.errorContext);
+        log.error("Agent error", { error: input.error, context: input.errorContext });
         return { errorHandling: "skip" };
       },
     },

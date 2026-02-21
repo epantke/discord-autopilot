@@ -10,41 +10,83 @@ const db = new Database(STATE_DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
-// ── Schema ──────────────────────────────────────────────────────────────────
-db.exec(`
-  CREATE TABLE IF NOT EXISTS sessions (
-    channel_id    TEXT PRIMARY KEY,
-    project_name  TEXT NOT NULL,
-    workspace_path TEXT NOT NULL,
-    branch        TEXT NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'idle',
-    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-  );
+// ── Migrations ──────────────────────────────────────────────────────────────
 
-  CREATE TABLE IF NOT EXISTS grants (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel_id  TEXT NOT NULL,
-    path        TEXT NOT NULL,
-    mode        TEXT NOT NULL DEFAULT 'ro',
-    expires_at  TEXT NOT NULL,
-    UNIQUE(channel_id, path)
-  );
+db.exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`);
 
-  CREATE TABLE IF NOT EXISTS task_history (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel_id   TEXT NOT NULL,
-    prompt       TEXT NOT NULL,
-    status       TEXT NOT NULL DEFAULT 'running',
-    started_at   TEXT NOT NULL DEFAULT (datetime('now')),
-    completed_at TEXT
-  );
+function getSchemaVersion() {
+  const row = db.prepare("SELECT version FROM schema_version").get();
+  return row ? row.version : 0;
+}
 
-  CREATE INDEX IF NOT EXISTS idx_task_history_channel
-    ON task_history(channel_id, started_at DESC);
+function setSchemaVersion(v) {
+  db.exec("DELETE FROM schema_version");
+  db.prepare("INSERT INTO schema_version (version) VALUES (?)").run(v);
+}
 
-  CREATE INDEX IF NOT EXISTS idx_grants_channel
-    ON grants(channel_id);
-`);
+/**
+ * Each entry is a function(db) that runs inside the upgrade transaction.
+ * Index 0 = migration from v0→v1, index 1 = v1→v2, etc.
+ */
+const migrations = [
+  // v0 → v1: baseline schema
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        channel_id    TEXT PRIMARY KEY,
+        project_name  TEXT NOT NULL,
+        workspace_path TEXT NOT NULL,
+        branch        TEXT NOT NULL,
+        status        TEXT NOT NULL DEFAULT 'idle',
+        created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS grants (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id  TEXT NOT NULL,
+        path        TEXT NOT NULL,
+        mode        TEXT NOT NULL DEFAULT 'ro',
+        expires_at  TEXT NOT NULL,
+        UNIQUE(channel_id, path)
+      );
+
+      CREATE TABLE IF NOT EXISTS task_history (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id   TEXT NOT NULL,
+        prompt       TEXT NOT NULL,
+        status       TEXT NOT NULL DEFAULT 'running',
+        started_at   TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_task_history_channel
+        ON task_history(channel_id, started_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_grants_channel
+        ON grants(channel_id);
+    `);
+  },
+
+  // v1 → v2: add timeout_ms to task_history
+  (db) => {
+    db.exec(`ALTER TABLE task_history ADD COLUMN timeout_ms INTEGER`);
+  },
+];
+
+function runMigrations() {
+  const current = getSchemaVersion();
+  if (current >= migrations.length) return;
+
+  const upgrade = db.transaction(() => {
+    for (let i = current; i < migrations.length; i++) {
+      migrations[i](db);
+    }
+    setSchemaVersion(migrations.length);
+  });
+  upgrade();
+}
+
+runMigrations();
 
 // ── Sessions ────────────────────────────────────────────────────────────────
 const stmtUpsertSession = db.prepare(`

@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH } from "./config.mjs";
+import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH, TASK_TIMEOUT_MS } from "./config.mjs";
 import {
   upsertSession,
   getSession,
@@ -20,6 +20,9 @@ import {
 } from "./grants.mjs";
 import { DiscordOutput } from "./discord-output.mjs";
 import { createPushApprovalRequest } from "./push-approval.mjs";
+import { createLogger } from "./logger.mjs";
+
+const log = createLogger("session");
 
 /**
  * In-memory session context per channel.
@@ -194,6 +197,7 @@ export async function getOrCreateSession(channelId, channel) {
 
   // Persist to DB
   upsertSession(channelId, PROJECT_NAME, workspacePath, branch, "idle");
+  log.info("Session created", { channelId, branch, workspace: workspacePath });
 
   // Restore grants from DB
   restoreGrants(channelId);
@@ -205,12 +209,16 @@ export async function getOrCreateSession(channelId, channel) {
 
 /**
  * Enqueue a task for execution. Tasks are serialized per channel.
+ * @param {string} channelId
+ * @param {import("discord.js").TextBasedChannel} channel - Parent channel (for session lookup)
+ * @param {string} prompt
+ * @param {import("discord.js").TextBasedChannel} [outputChannel] - Thread or channel for output
  */
-export async function enqueueTask(channelId, channel, prompt) {
+export async function enqueueTask(channelId, channel, prompt, outputChannel) {
   const ctx = await getOrCreateSession(channelId, channel);
 
   return new Promise((resolve, reject) => {
-    ctx.queue.push({ prompt, resolve, reject });
+    ctx.queue.push({ prompt, resolve, reject, outputChannel: outputChannel || channel });
     processQueue(channelId, channel);
   });
 }
@@ -220,16 +228,25 @@ async function processQueue(channelId, channel) {
   if (!ctx || ctx.status === "working" || ctx.paused) return;
   if (ctx.queue.length === 0) return;
 
-  const { prompt, resolve, reject } = ctx.queue.shift();
+  const { prompt, resolve, reject, outputChannel } = ctx.queue.shift();
 
   ctx.status = "working";
   updateSessionStatus(channelId, "working");
-  ctx.output = new DiscordOutput(channel);
+  ctx.output = new DiscordOutput(outputChannel);
   ctx.taskId = insertTask(channelId, prompt);
+  log.info("Task started", { channelId, taskId: ctx.taskId, prompt: prompt.slice(0, 100) });
 
   try {
-    const response = await ctx.copilotSession.sendAndWait({ prompt });
+    const timeout = new Promise((_, reject) => {
+      const t = setTimeout(() => reject(new Error("Task timed out")), TASK_TIMEOUT_MS);
+      t.unref();
+    });
+    const response = await Promise.race([
+      ctx.copilotSession.sendAndWait({ prompt }),
+      timeout,
+    ]);
     completeTask(ctx.taskId, "completed");
+    log.info("Task completed", { channelId, taskId: ctx.taskId });
     ctx.status = "idle";
     updateSessionStatus(channelId, "idle");
     resolve(response);
@@ -237,6 +254,14 @@ async function processQueue(channelId, channel) {
     // If aborted via /stop, cleanup was already handled
     if (ctx._aborted) {
       ctx._aborted = false;
+    } else if (err.message === "Task timed out") {
+      log.warn("Task timed out", { channelId, taskId: ctx.taskId, timeoutMs: TASK_TIMEOUT_MS });
+      ctx._aborted = true;
+      try { ctx.copilotSession.abort(); } catch {}
+      completeTask(ctx.taskId, "aborted");
+      ctx.output?.finish(`⏱ **Task timed out** after ${Math.round(TASK_TIMEOUT_MS / 60_000)} min.`);
+      ctx.status = "idle";
+      updateSessionStatus(channelId, "idle");
     } else {
       completeTask(ctx.taskId, "failed");
       ctx.status = "idle";
