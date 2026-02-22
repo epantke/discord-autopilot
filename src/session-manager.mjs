@@ -805,6 +805,14 @@ export function isAwaitingQuestion(channelId) {
   return ctx?.awaitingQuestion === true;
 }
 
+/** Returns true if any session is currently running a task. */
+export function hasWorkingSessions() {
+  for (const ctx of sessions.values()) {
+    if (ctx.status === "working") return true;
+  }
+  return false;
+}
+
 // ── Idle Session Sweep & Task Pruning ───────────────────────────────────────
 
 const IDLE_SWEEP_MS = 24 * 60 * 60_000; // 24 hours

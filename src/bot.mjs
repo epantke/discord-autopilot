@@ -56,6 +56,7 @@ import {
   setChannelRepo,
   getChannelRepo,
   clearChannelRepo,
+  hasWorkingSessions,
 } from "./session-manager.mjs";
 
 import { addGrant, revokeGrant, startGrantCleanup, restoreGrants } from "./grants.mjs";
@@ -696,84 +697,106 @@ async function sendStartupNotification({ envIssues, recoveryInfo } = {}) {
   }
 }
 
-// ── Periodic Update Checker ─────────────────────────────────────────────────
+// ── Autonomous Auto-Updater ─────────────────────────────────────────────────
 
 let _lastNotifiedVersion = null;
+let _autoUpdateInProgress = false;
 
-async function sendUpdateBanner(updateInfo) {
-  if (_lastNotifiedVersion === updateInfo.latestVersion) return;
-  _lastNotifiedVersion = updateInfo.latestVersion;
-
-  const embed = new EmbedBuilder()
-    .setTitle("⚔️ Update verfügbar!")
-    .setColor(0x2d1b4e)
-    .setDescription(
-      `Neue Version von **Discord Autopilot** bereit!\n\n` +
-      `\`v${updateInfo.currentVersion}\` → \`v${updateInfo.latestVersion}\``
-    )
-    .setTimestamp();
-
-  if (updateInfo.releaseNotes) {
-    const notes = updateInfo.releaseNotes.length > 500
-      ? updateInfo.releaseNotes.slice(0, 497) + "…"
-      : updateInfo.releaseNotes;
-    embed.addFields({ name: "🗡️ What's New", value: notes, inline: false });
-  }
-
-  embed.addFields({
-    name: "🔮 Update",
-    value: "Nutze `/update apply` in Discord, oder `--update` / `-Update` CLI~",
-    inline: false,
-  });
-
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setLabel("👁️ Release")
-      .setStyle(ButtonStyle.Link)
-      .setURL(updateInfo.releaseUrl),
-  );
-
-  const payload = { embeds: [embed], components: [row] };
+async function notifyUpdate(message, { color = 0xFFAA00, title = "🔄 Auto-Update" } = {}) {
+  const embed = new EmbedBuilder().setTitle(title).setColor(color).setDescription(message).setTimestamp();
+  const payload = { embeds: [embed] };
 
   if (ADMIN_USER_ID) {
     try {
       const user = await client.users.fetch(ADMIN_USER_ID);
       await user.send(payload);
-      log.info("Update notification sent to admin", { version: updateInfo.latestVersion });
-    } catch (err) {
-      log.warn("Failed to send update notification DM", { error: err.message });
-    }
+    } catch { /* best effort */ }
   }
-
   if (STARTUP_CHANNEL_ID) {
     try {
       const ch = await client.channels.fetch(STARTUP_CHANNEL_ID);
       if (ch?.isTextBased()) await ch.send(payload);
-    } catch (err) {
-      log.warn("Failed to send update notification to channel", { error: err.message });
+    } catch { /* best effort */ }
+  }
+}
+
+async function performAutoUpdate(updateInfo) {
+  if (_autoUpdateInProgress) return;
+  _autoUpdateInProgress = true;
+
+  try {
+    // Notify that an update was found
+    await notifyUpdate(
+      `New version detected: \`v${updateInfo.currentVersion}\` → \`v${updateInfo.latestVersion}\`\n\n` +
+      (updateInfo.releaseNotes
+        ? `**What's New:**\n${updateInfo.releaseNotes.slice(0, 600)}${updateInfo.releaseNotes.length > 600 ? "…" : ""}\n\n`
+        : "") +
+      `⏳ Waiting for active tasks to finish before updating…`,
+      { title: "🚀 Update Available — Auto-Updating" }
+    );
+
+    // Wait for all sessions to be idle (check every 10s, max 30 min)
+    const maxWait = 30 * 60_000;
+    const start = Date.now();
+    while (hasWorkingSessions()) {
+      if (Date.now() - start > maxWait) {
+        log.warn("Auto-update: timed out waiting for idle sessions — proceeding anyway");
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 10_000));
     }
+
+    await notifyUpdate(
+      `⬇️ Downloading **v${updateInfo.latestVersion}**…`,
+      { color: 0x3498db, title: "🔄 Updating…" }
+    );
+
+    const result = await downloadAndApplyUpdate();
+
+    if (result.success) {
+      await notifyUpdate(
+        `✅ Updated to **v${result.version}**\n\n` +
+        `💾 Backup: \`${result.backupPath}\`\n` +
+        `🔄 **Restarting now…**`,
+        { color: 0x2ecc71, title: "✅ Update Applied" }
+      );
+      // Brief delay to let Discord messages send
+      await new Promise((r) => setTimeout(r, 2_000));
+      restartBot();
+    } else {
+      log.error("Auto-update failed", { reason: result.reason });
+      await notifyUpdate(
+        `❌ Auto-update failed: ${result.reason}\n\nThe bot continues on **v${updateInfo.currentVersion}**.`,
+        { color: 0xe74c3c, title: "❌ Update Failed" }
+      );
+      _autoUpdateInProgress = false;
+    }
+  } catch (err) {
+    log.error("Auto-update error", { error: err.message });
+    _autoUpdateInProgress = false;
   }
 }
 
 function startUpdateChecker() {
-  const initialTimer = setTimeout(async () => {
+  const runCheck = async () => {
     try {
       const result = await checkForUpdate();
-      if (result.available) await sendUpdateBanner(result);
+      if (result.available && _lastNotifiedVersion !== result.latestVersion) {
+        _lastNotifiedVersion = result.latestVersion;
+        log.info("Auto-update triggered", { current: result.currentVersion, latest: result.latestVersion });
+        performAutoUpdate(result);
+      }
     } catch (err) {
-      log.warn("Initial update check failed", { error: err.message });
+      log.warn("Update check failed", { error: err.message });
     }
-  }, 30_000);
+  };
+
+  // First check 30s after startup
+  const initialTimer = setTimeout(runCheck, 30_000);
   initialTimer.unref();
 
-  const interval = setInterval(async () => {
-    try {
-      const result = await checkForUpdate();
-      if (result.available) await sendUpdateBanner(result);
-    } catch (err) {
-      log.warn("Periodic update check failed", { error: err.message });
-    }
-  }, UPDATE_CHECK_INTERVAL_MS);
+  // Then check periodically
+  const interval = setInterval(runCheck, UPDATE_CHECK_INTERVAL_MS);
   interval.unref();
 }
 
@@ -1077,23 +1100,14 @@ client.on("interactionCreate", async (interaction) => {
           await interaction.deferReply({ flags: MessageFlags.Ephemeral });
           const result = await checkForUpdate({ force: true });
 
-          if (result.error) {
-            const embed = new EmbedBuilder()
-              .setTitle("🩸 Update-Check fehlgeschlagen")
-              .setColor(0x8b0000)
-              .setDescription(`Konnte nicht auf Updates prüfen: ${redactSecrets(result.error).clean}`)
-              .setTimestamp();
-            await interaction.editReply({ embeds: [embed] });
-            break;
-          }
-
           if (result.available) {
             const embed = new EmbedBuilder()
-              .setTitle("⚔️ Update verfügbar!")
-              .setColor(0x2d1b4e)
+              .setTitle("🚀 Update Available")
+              .setColor(0xFFAA00)
               .setDescription(
-                `Neue Version bereit~\n\n` +
-                `\`v${result.currentVersion}\` → \`v${result.latestVersion}\``
+                `\`v${result.currentVersion}\` → \`v${result.latestVersion}\`\n\n` +
+                `Auto-update is enabled — the bot will update automatically when all tasks finish.\n` +
+                `Use \`/update apply\` to update immediately.`
               )
               .setTimestamp();
 
@@ -1101,18 +1115,12 @@ client.on("interactionCreate", async (interaction) => {
               const notes = result.releaseNotes.length > 800
                 ? result.releaseNotes.slice(0, 797) + "…"
                 : result.releaseNotes;
-              embed.addFields({ name: "🗡️ What's New", value: notes, inline: false });
+              embed.addFields({ name: "📋 What's New", value: notes, inline: false });
             }
-
-            embed.addFields({
-              name: "🔮 Update",
-              value: "Nutze `/update action:apply` zum Updaten~",
-              inline: false,
-            });
 
             const row = new ActionRowBuilder().addComponents(
               new ButtonBuilder()
-                .setLabel("👁️ Release")
+                .setLabel("View Release")
                 .setStyle(ButtonStyle.Link)
                 .setURL(result.releaseUrl),
             );
@@ -1120,9 +1128,9 @@ client.on("interactionCreate", async (interaction) => {
             await interaction.editReply({ embeds: [embed], components: [row] });
           } else {
             const embed = new EmbedBuilder()
-              .setTitle("💜 Aktuell")
-              .setColor(0x2d1b4e)
-              .setDescription(`Aktuellste Version: **v${result.currentVersion}**`)
+              .setTitle("✅ Up to Date")
+              .setColor(0x2ecc71)
+              .setDescription(`Running the latest version: **v${result.currentVersion}**`)
               .setTimestamp();
             await interaction.editReply({ embeds: [embed] });
           }
@@ -1135,90 +1143,44 @@ client.on("interactionCreate", async (interaction) => {
 
           if (!check.available) {
             const embed = new EmbedBuilder()
-              .setTitle("💜 Bereits aktuell")
-              .setColor(0x2d1b4e)
-              .setDescription(`Version **v${check.currentVersion || CURRENT_VERSION}** — kein Update nötig~`)
+              .setTitle("✅ Already Up to Date")
+              .setColor(0x2ecc71)
+              .setDescription(`Running version **v${check.currentVersion || CURRENT_VERSION}** — no update needed.`)
               .setTimestamp();
             await interaction.editReply({ embeds: [embed] });
             break;
           }
 
-          const confirmEmbed = new EmbedBuilder()
-            .setTitle("🔮 Update bestätigen")
-            .setColor(0x71797e)
-            .setDescription(
-              `Update von **v${check.currentVersion}** auf **v${check.latestVersion}**?\n\n` +
-              `🥀 Der Bot startet danach neu.`
-            )
-            .setTimestamp();
+          await interaction.editReply({
+            embeds: [new EmbedBuilder()
+              .setTitle("🔄 Updating…")
+              .setColor(0x3498db)
+              .setDescription(`Downloading **v${check.latestVersion}** and applying update…`)
+              .setTimestamp()],
+          });
 
-          const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId("update_confirm")
-              .setLabel("💜 Jetzt updaten")
-              .setStyle(ButtonStyle.Success),
-            new ButtonBuilder()
-              .setCustomId("update_cancel")
-              .setLabel("Abbrechen")
-              .setStyle(ButtonStyle.Secondary),
-          );
+          const result = await downloadAndApplyUpdate();
 
-          const msg = await interaction.editReply({ embeds: [confirmEmbed], components: [row] });
-
-          try {
-            const btn = await msg.awaitMessageComponent({
-              filter: (i) => i.user.id === interaction.user.id,
-              time: 120_000,
-            });
-
-            if (btn.customId === "update_cancel") {
-              await btn.update({
-                embeds: [new EmbedBuilder().setTitle("🌑 Update abgebrochen").setColor(0x71797e).setTimestamp()],
-                components: [],
-              });
-              break;
-            }
-
-            await btn.update({
-              embeds: [new EmbedBuilder()
-                .setTitle("🌙 Download läuft…")
-                .setColor(0x2d1b4e)
-                .setDescription(`Lade v${check.latestVersion} herunter…`)
-                .setTimestamp()],
-              components: [],
-            });
-
-            const result = await downloadAndApplyUpdate();
-
-            if (result.success) {
-              await interaction.editReply({
-                embeds: [new EmbedBuilder()
-                  .setTitle("💜 Update angewendet!")
-                  .setColor(0x2d1b4e)
-                  .setDescription(
-                    `Aktualisiert auf **v${result.version}**\n\n` +
-                    `🔮 **Bot startet jetzt neu.** Sollte in wenigen Sekunden zurück sein~\n\n` +
-                    `🗡️ Backup: \`${result.backupPath}\``
-                  )
-                  .setTimestamp()],
-                components: [],
-              });
-              setTimeout(() => restartBot(), 2_000);
-            } else {
-              await interaction.editReply({
-                embeds: [new EmbedBuilder()
-                  .setTitle("🩸 Update fehlgeschlagen")
-                  .setColor(0x8b0000)
-                  .setDescription(`**Grund:** ${result.reason}\n\nBot läuft weiter auf der aktuellen Version.`)
-                  .setTimestamp()],
-                components: [],
-              });
-            }
-          } catch {
+          if (result.success) {
             await interaction.editReply({
-              embeds: [new EmbedBuilder().setTitle("🌑 Update-Timeout").setColor(0x71797e).setDescription("Keine Antwort erhalten. Update abgebrochen~").setTimestamp()],
-              components: [],
-            }).catch(() => {});
+              embeds: [new EmbedBuilder()
+                .setTitle("✅ Update Applied")
+                .setColor(0x2ecc71)
+                .setDescription(
+                  `Updated to **v${result.version}**\n\n` +
+                  `🔄 **Restarting now…**\n💾 Backup: \`${result.backupPath}\``
+                )
+                .setTimestamp()],
+            });
+            setTimeout(() => restartBot(), 2_000);
+          } else {
+            await interaction.editReply({
+              embeds: [new EmbedBuilder()
+                .setTitle("❌ Update Failed")
+                .setColor(0xe74c3c)
+                .setDescription(`**Reason:** ${result.reason}\n\nBot continues on the current version.`)
+                .setTimestamp()],
+            });
           }
           break;
         }

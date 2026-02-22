@@ -45,10 +45,12 @@ export async function checkForUpdate({ force = false } = {}) {
     const resp = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
 
     if (resp.status === 404) {
-      return { available: false, currentVersion: CURRENT_VERSION, error: "No releases found" };
+      log.warn("No releases found — skipping update check");
+      return { available: false, currentVersion: CURRENT_VERSION };
     }
     if (!resp.ok) {
-      return { available: false, currentVersion: CURRENT_VERSION, error: `GitHub API returned ${resp.status}` };
+      log.warn("Update check got non-OK response", { status: resp.status });
+      return { available: false, currentVersion: CURRENT_VERSION };
     }
 
     const release = await resp.json();
@@ -81,8 +83,8 @@ export async function checkForUpdate({ force = false } = {}) {
 
     return result;
   } catch (err) {
-    log.error("Update check failed", { error: err.message });
-    return { available: false, currentVersion: CURRENT_VERSION, error: err.message };
+    log.warn("Update check failed (connection error)", { error: err.message });
+    return { available: false, currentVersion: CURRENT_VERSION };
   }
 }
 
