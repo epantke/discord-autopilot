@@ -1604,7 +1604,12 @@ client.on("warn", (msg) => {
   log.warn("Discord client warning", { message: msg });
 });
 
+/** Timestamp of the last disconnect — used to suppress notifications for brief reconnects. */
+let _lastDisconnectAt = 0;
+const RECONNECT_NOTIFY_THRESHOLD_MS = 30_000;
+
 client.on("shardDisconnect", (event, shardId) => {
+  _lastDisconnectAt = Date.now();
   log.warn("Shard disconnected", { shardId, code: event?.code });
 });
 
@@ -1613,17 +1618,26 @@ client.on("shardError", (err, shardId) => {
 });
 
 client.on("shardReconnecting", (shardId) => {
+  if (!_lastDisconnectAt) _lastDisconnectAt = Date.now();
   log.info("Shard reconnecting", { shardId });
 });
 
 client.on("shardResume", async (shardId) => {
-  log.info("Shard resumed", { shardId });
+  const downtime = _lastDisconnectAt ? Date.now() - _lastDisconnectAt : 0;
+  _lastDisconnectAt = 0;
+  log.info("Shard resumed", { shardId, downtimeMs: downtime });
 
-  // Reconnect notification — prefer admin DM, fallback to channel
+  // Only notify on longer disconnects — brief reconnects are normal gateway behaviour
+  if (downtime < RECONNECT_NOTIFY_THRESHOLD_MS) return;
+
+  const downtimeStr = downtime < 60_000
+    ? `${Math.round(downtime / 1000)}s`
+    : `${Math.round(downtime / 60_000)} min`;
+
   const reconnectEmbed = new EmbedBuilder()
     .setTitle("🥀 Reconnected")
     .setColor(0x71797e)
-    .setDescription(`**${client.user?.tag ?? "Bot"}** ist nach einem kurzen Disconnect zurück~`)
+    .setDescription(`**${client.user?.tag ?? "Bot"}** ist nach **${downtimeStr}** Disconnect zurück~`)
     .addFields({ name: "Projekt", value: PROJECT_NAME, inline: true })
     .setTimestamp();
 
