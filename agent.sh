@@ -102,6 +102,19 @@ write_check() {
 box_top()    { echo -e "       ${DGRAY}┌$(printf '─%.0s' $(seq 1 "$1"))${NC}"; }
 box_bottom() { echo -e "       ${DGRAY}└$(printf '─%.0s' $(seq 1 "$1"))${NC}"; }
 
+# Version comparison — returns 0 if $1 >= $2 (semver-compatible, no sort -V needed)
+_ver_ge() {
+  local IFS='.'
+  local -a a=($1) b=($2)
+  local i
+  for (( i=0; i<${#a[@]} || i<${#b[@]}; i++ )); do
+    local ai=${a[i]:-0} bi=${b[i]:-0}
+    (( ai > bi )) && return 0
+    (( ai < bi )) && return 1
+  done
+  return 0
+}
+
 # ── Platform detection ───────────────────────────────────────────────────────
 ARCH=$(uname -m 2>/dev/null || echo "unknown")
 OS_KERNEL=$(uname -s 2>/dev/null || echo "unknown")
@@ -184,22 +197,26 @@ install_node() {
   case "$PKG_MGR" in
     apt)
       info "Installing Node.js via NodeSource (LTS) …"
-      if fetch_url "https://deb.nodesource.com/setup_22.x" > /tmp/_nodesource_setup.sh 2>/dev/null; then
-        _sudo bash /tmp/_nodesource_setup.sh 2>/dev/null
-        rm -f /tmp/_nodesource_setup.sh
+      local _ns_setup; _ns_setup=$(safe_mktemp)
+      if fetch_url "https://deb.nodesource.com/setup_22.x" > "$_ns_setup" 2>/dev/null; then
+        _sudo bash "$_ns_setup" 2>/dev/null
+        rm -f "$_ns_setup"
         _sudo apt-get install -y -qq nodejs
       else
+        rm -f "$_ns_setup"
         warn "NodeSource setup failed. Trying system package …"
         _sudo apt-get update -qq && _sudo apt-get install -y -qq nodejs npm
       fi
       ;;
     dnf|yum)
       info "Installing Node.js via NodeSource (LTS) …"
-      if fetch_url "https://rpm.nodesource.com/setup_22.x" > /tmp/_nodesource_setup.sh 2>/dev/null; then
-        _sudo bash /tmp/_nodesource_setup.sh 2>/dev/null
-        rm -f /tmp/_nodesource_setup.sh
+      local _ns_setup; _ns_setup=$(safe_mktemp)
+      if fetch_url "https://rpm.nodesource.com/setup_22.x" > "$_ns_setup" 2>/dev/null; then
+        _sudo bash "$_ns_setup" 2>/dev/null
+        rm -f "$_ns_setup"
         _sudo "$PKG_MGR" install -y -q nodejs
       else
+        rm -f "$_ns_setup"
         _sudo "$PKG_MGR" install -y -q nodejs npm
       fi
       ;;
@@ -275,7 +292,7 @@ fetch_status() {
       curl -s -o "$outfile" -w "%{http_code}" "$url" --max-time 10 2>/dev/null
     fi
   elif command -v wget >/dev/null 2>&1; then
-    local _hdr_file; _hdr_file=$(mktemp)
+    local _hdr_file; _hdr_file=$(safe_mktemp)
     local _wget_args=(-q -O "$outfile" -S --timeout=10)
     [[ -n "$extra_header" ]] && _wget_args+=(--header="$extra_header")
     if wget "${_wget_args[@]}" "$url" 2>"$_hdr_file"; then
@@ -298,9 +315,9 @@ fetch_with_headers() {
     [[ -n "$auth_header" ]] && _curl_args+=(-H "$auth_header")
     curl "${_curl_args[@]}" "$url" 2>/dev/null
   elif command -v wget >/dev/null 2>&1; then
-    local _wget_args=(-q -O "$body_file" -S --save-headers --timeout=10)
+    local _wget_args=(-q -O "$body_file" -S --timeout=10)
     [[ -n "$auth_header" ]] && _wget_args+=(--header="$auth_header")
-    local _tmp_headers; _tmp_headers=$(mktemp)
+    local _tmp_headers; _tmp_headers=$(safe_mktemp)
     if wget "${_wget_args[@]}" "$url" 2>"$_tmp_headers"; then
       grep -v '^$' "$_tmp_headers" > "$headers_file"
       grep -o 'HTTP/[0-9.]* [0-9]*' "$_tmp_headers" | tail -1 | awk '{print $2}'
@@ -327,7 +344,18 @@ UPDATE_API_URL="https://api.github.com/repos/$UPDATE_REPO/releases/latest"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$SCRIPT_DIR/.env" ]]; then
   # Validate .env is readable and not binary/corrupt
-  if [[ -r "$SCRIPT_DIR/.env" ]] && file "$SCRIPT_DIR/.env" 2>/dev/null | grep -qi 'text\|ascii\|utf'; then
+  _env_is_text=false
+  if [[ -r "$SCRIPT_DIR/.env" ]]; then
+    if command -v file >/dev/null 2>&1 && file "$SCRIPT_DIR/.env" 2>/dev/null | grep -qi 'text\|ascii\|utf'; then
+      _env_is_text=true
+    elif ! command -v file >/dev/null 2>&1; then
+      # No 'file' command — check for NUL bytes as binary indicator
+      if ! grep -qP '\x00' "$SCRIPT_DIR/.env" 2>/dev/null && ! tr -d '[:print:][:space:]' < "$SCRIPT_DIR/.env" | grep -q . 2>/dev/null; then
+        _env_is_text=true
+      fi
+    fi
+  fi
+  if [[ "$_env_is_text" == "true" ]]; then
     set -a
     # shellcheck source=/dev/null
     # Strip \r from CRLF line endings, skip blank/comment-only, filter valid KEY=VALUE lines
@@ -339,7 +367,8 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
 fi
 
 # ── Lockfile — prevent concurrent runs ──────────────────────────────────────
-_LOCKFILE="${TMPDIR:-/tmp}/discord-agent-$(echo "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1 || echo 'default').lock"
+_dir_hash=$(echo "$SCRIPT_DIR" | md5sum 2>/dev/null | cut -d' ' -f1 || md5 -q -s "$SCRIPT_DIR" 2>/dev/null || echo "$SCRIPT_DIR" | cksum | cut -d' ' -f1 || echo 'default')
+_LOCKFILE="${TMPDIR:-/tmp}/discord-agent-${_dir_hash}.lock"
 if [[ -f "$_LOCKFILE" ]]; then
   _LOCK_PID=$(cat "$_LOCKFILE" 2>/dev/null)
   if [[ -n "$_LOCK_PID" ]] && kill -0 "$_LOCK_PID" 2>/dev/null; then
@@ -348,7 +377,18 @@ if [[ -f "$_LOCKFILE" ]]; then
     exit 1
   fi
 fi
-echo $$ > "$_LOCKFILE"
+# Atomic lockfile creation — avoids TOCTOU race
+if ! ( set -o noclobber; echo $$ > "$_LOCKFILE" ) 2>/dev/null; then
+  # File appeared between check and create — re-check PID
+  _LOCK_PID=$(cat "$_LOCKFILE" 2>/dev/null)
+  if [[ -n "$_LOCK_PID" ]] && kill -0 "$_LOCK_PID" 2>/dev/null; then
+    echo -e "  \033[0;31m✘ FATAL:\033[0m Another instance is already running (PID $_LOCK_PID)."
+    echo -e "  If this is incorrect, delete: $_LOCKFILE"
+    exit 1
+  fi
+  # Stale lock — overwrite
+  echo $$ > "$_LOCKFILE"
+fi
 
 # ── Handle --update flag ────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--update" || "${1:-}" == "-u" ]]; then
@@ -373,7 +413,11 @@ if [[ "${1:-}" == "--update" || "${1:-}" == "-u" ]]; then
     exit 0
   fi
 
-  HIGHEST=$(printf '%s\n%s' "$LATEST_VER" "$SCRIPT_VERSION" | sort -V | tail -1)
+  HIGHEST=$(printf '%s\n%s' "$LATEST_VER" "$SCRIPT_VERSION" | sort -V 2>/dev/null | tail -1)
+  # Fallback for systems without sort -V (e.g. macOS)
+  if [[ -z "$HIGHEST" ]]; then
+    _ver_ge "$LATEST_VER" "$SCRIPT_VERSION" && HIGHEST="$LATEST_VER" || HIGHEST="$SCRIPT_VERSION"
+  fi
   if [[ "$HIGHEST" != "$LATEST_VER" ]]; then
     ok "Already up to date (v$SCRIPT_VERSION, latest release: v$LATEST_VER)"
     exit 0
@@ -387,14 +431,12 @@ if [[ "${1:-}" == "--update" || "${1:-}" == "-u" ]]; then
   [[ -z "$DOWNLOAD_URL" ]] && die "No agent.sh asset found in release v$LATEST_VER"
 
   info "Downloading v$LATEST_VER…"
-  TMPFILE=$(mktemp)
-  trap 'rm -f "$TMPFILE"' EXIT
+  TMPFILE=$(safe_mktemp)
 
-  fetch_url "$DOWNLOAD_URL" > "$TMPFILE" 2>/dev/null || { rm -f "$TMPFILE"; die "Download failed." "${_LAST_ERR:-network error}"; }
+  fetch_url "$DOWNLOAD_URL" > "$TMPFILE" 2>/dev/null || die "Download failed." "${_LAST_ERR:-network error}"
 
   if ! head -1 "$TMPFILE" | grep -q "#!/usr/bin/env bash"; then
     _first=$(head -c 80 "$TMPFILE" | tr -d '\n')
-    rm -f "$TMPFILE"
     die "Downloaded file is not a valid bash script." "Got: ${_first:0:60}"
   fi
 
@@ -402,7 +444,6 @@ if [[ "${1:-}" == "--update" || "${1:-}" == "-u" ]]; then
   cp "$SELF_PATH" "${SELF_PATH}.bak"
   mv "$TMPFILE" "$SELF_PATH"
   chmod +x "$SELF_PATH"
-  trap - EXIT
 
   echo ""
   ok "Updated to v$LATEST_VER!"
@@ -432,7 +473,11 @@ if [[ "$SCRIPT_VERSION" != "0.0.0-dev" ]] && command -v node >/dev/null 2>&1; th
       process.stdout.write((JSON.parse(require('fs').readFileSync(0,'utf8')).tag_name||'').replace(/^v/,''))
     " 2>/dev/null || true)
     if [[ -n "$_LATEST_VER" && "$_LATEST_VER" != "$SCRIPT_VERSION" ]]; then
-      _HIGHEST=$(printf '%s\n%s' "$_LATEST_VER" "$SCRIPT_VERSION" | sort -V | tail -1)
+      _HIGHEST=$(printf '%s\n%s' "$_LATEST_VER" "$SCRIPT_VERSION" | sort -V 2>/dev/null | tail -1)
+      # Fallback for systems without sort -V (e.g. macOS)
+      if [[ -z "$_HIGHEST" ]]; then
+        _ver_ge "$_LATEST_VER" "$SCRIPT_VERSION" && _HIGHEST="$_LATEST_VER" || _HIGHEST="$SCRIPT_VERSION"
+      fi
       if [[ "$_HIGHEST" == "$_LATEST_VER" ]]; then
         echo ""
         echo -e "  ${YELLOW}⚡ UPDATE AVAILABLE: ${GREEN}v${_LATEST_VER}${NC}"
@@ -800,20 +845,21 @@ if [[ ${#MISSING[@]} -gt 0 ]]; then
   echo -e "  ${BLACK}${BG_RED} MISSING TOOLS ${NC}"
   echo ""
 
-  declare -A INSTALL_URL INSTALL_HINT
-  INSTALL_URL[git]="https://git-scm.com/downloads"
-  INSTALL_HINT[git]="sudo apt install git  /  sudo dnf install git  /  brew install git"
-  INSTALL_URL[node]="https://nodejs.org/"
-  INSTALL_HINT[node]="Install LTS version (>= 18). npm is included."
-  INSTALL_URL[npm]="https://nodejs.org/"
-  INSTALL_HINT[npm]="Comes bundled with Node.js."
-  INSTALL_URL[copilot]="https://github.com/github/gh-copilot"
-  INSTALL_HINT[copilot]="Install gh CLI first, then: gh extension install github/gh-copilot"
-
   for tool in "${MISSING[@]}"; do
+    _tool_url=""; _tool_hint=""
+    case "$tool" in
+      git)     _tool_url="https://git-scm.com/downloads";
+               _tool_hint="sudo apt install git  /  sudo dnf install git  /  brew install git" ;;
+      node)    _tool_url="https://nodejs.org/";
+               _tool_hint="Install LTS version (>= 18). npm is included." ;;
+      npm)     _tool_url="https://nodejs.org/";
+               _tool_hint="Comes bundled with Node.js." ;;
+      copilot) _tool_url="https://github.com/github/gh-copilot";
+               _tool_hint="Install gh CLI first, then: gh extension install github/gh-copilot" ;;
+    esac
     echo -e "    ${RED}✘${NC} ${WHITE}${tool}${NC}"
-    echo -e "      ${CYAN}${INSTALL_URL[$tool]}${NC}"
-    echo -e "      ${DGRAY}${INSTALL_HINT[$tool]}${NC}"
+    echo -e "      ${CYAN}${_tool_url}${NC}"
+    echo -e "      ${DGRAY}${_tool_hint}${NC}"
     echo ""
   done
   echo -e "  ${YELLOW}Install the missing tools, then re-run this script.${NC}"
@@ -1140,7 +1186,10 @@ if [[ -n "$cfgBranch" ]]; then
   ok "DEFAULT_BRANCH: $cfgBranch"
 elif [[ -t 0 ]]; then
   # Collect remote branches (strip origin/ prefix, ignore HEAD)
-  mapfile -t _branches < <(
+  _branches=()
+  while IFS= read -r _b; do
+    [[ -n "$_b" ]] && _branches+=("$_b")
+  done < <(
     git -C "$REPO_DIR" branch -r 2>/dev/null \
       | sed 's/^[* ]*//' \
       | grep -v '\->' \
@@ -1274,5 +1323,10 @@ export DEFAULT_BRANCH="${DEFAULT_BRANCH:-}"
 export ADMIN_USER_ID="${ADMIN_USER_ID:-}"
 export STARTUP_CHANNEL_ID="${STARTUP_CHANNEL_ID:-}"
 export AGENT_SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+
+# Clean up temp files before exec replaces this process (EXIT trap won't fire after exec)
+for _f in "${_TMPFILES[@]}"; do
+  rm -f "$_f" 2>/dev/null
+done
 
 exec node "$APP/src/bot.mjs"
