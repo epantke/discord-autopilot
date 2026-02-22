@@ -190,7 +190,7 @@ export class DiscordOutput {
   async _sendAsAttachment(content) {
     const attachment = new AttachmentBuilder(Buffer.from(content, "utf-8"), {
       name: "output.txt",
-      description: "Agent output (too large for a message)",
+      description: "Output (zu groß für eine Nachricht)",
     });
     await this.channel.send({ files: [attachment] });
   }

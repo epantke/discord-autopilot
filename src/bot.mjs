@@ -81,23 +81,23 @@ const log = createLogger("bot");
 const commands = [
   new SlashCommandBuilder()
     .setName("grant")
-    .setDescription("Grant agent access to a path outside workspace")
+    .setDescription("Zugriff auf Pfad außerhalb des Workspace gewähren")
     .addStringOption((opt) =>
-      opt.setName("path").setDescription("Absolute path to grant").setRequired(true)
+      opt.setName("path").setDescription("Absoluter Pfad").setRequired(true)
     )
     .addStringOption((opt) =>
       opt
         .setName("mode")
-        .setDescription("Access mode")
+        .setDescription("Zugriffsmodus")
         .addChoices(
-          { name: "Read Only", value: "ro" },
-          { name: "Read/Write", value: "rw" }
+          { name: "Nur Lesen", value: "ro" },
+          { name: "Lesen/Schreiben", value: "rw" }
         )
     )
     .addIntegerOption((opt) =>
       opt
         .setName("ttl")
-        .setDescription("Time-to-live in minutes (default: 30)")
+        .setDescription("Gültigkeitsdauer in Minuten (Standard: 30)")
         .setMinValue(1)
         .setMaxValue(1440)
     )
@@ -105,90 +105,90 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("revoke")
-    .setDescription("Revoke agent access to a path")
+    .setDescription("Zugriff auf Pfad widerrufen")
     .addStringOption((opt) =>
-      opt.setName("path").setDescription("Absolute path to revoke").setRequired(true)
+      opt.setName("path").setDescription("Absoluter Pfad").setRequired(true)
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("reset")
-    .setDescription("Reset the agent session for this channel")
+    .setDescription("Session für diesen Channel zurücksetzen")
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("stop")
-    .setDescription("Hard stop — abort the running task immediately")
+    .setDescription("Sofort abbrechen — laufenden Task killen")
     .addBooleanOption((opt) =>
       opt
         .setName("clear_queue")
-        .setDescription("Also clear all pending tasks (default: true)")
+        .setDescription("Auch wartende Tasks löschen (Standard: ja)")
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("pause")
-    .setDescription("Pause queue processing (current task finishes, no new ones start)")
+    .setDescription("Queue pausieren — laufender Task endet, keine neuen starten")
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("resume")
-    .setDescription("Resume queue processing after a pause")
+    .setDescription("Queue fortsetzen nach Pause")
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("config")
-    .setDescription("View current bot configuration")
+    .setDescription("Aktuelle Bot-Konfiguration anzeigen")
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("update")
-    .setDescription("Check for and apply bot updates")
+    .setDescription("Updates prüfen und anwenden")
     .addStringOption((opt) =>
       opt
         .setName("action")
-        .setDescription("What to do")
+        .setDescription("Aktion")
         .addChoices(
-          { name: "Check for updates", value: "check" },
-          { name: "Apply update now", value: "apply" }
+          { name: "Nach Updates suchen", value: "check" },
+          { name: "Update jetzt anwenden", value: "apply" }
         )
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("responders")
-    .setDescription("Manage who can answer agent questions")
+    .setDescription("Verwalten wer auf Agent-Fragen antworten darf")
     .addStringOption((opt) =>
       opt
         .setName("action")
-        .setDescription("What to do")
+        .setDescription("Aktion")
         .setRequired(true)
         .addChoices(
-          { name: "Add user", value: "add" },
-          { name: "Remove user", value: "remove" },
-          { name: "List responders", value: "list" }
+          { name: "Hinzufügen", value: "add" },
+          { name: "Entfernen", value: "remove" },
+          { name: "Liste anzeigen", value: "list" }
         )
     )
     .addUserOption((opt) =>
-      opt.setName("user").setDescription("User to add/remove")
+      opt.setName("user").setDescription("User zum Hinzufügen/Entfernen")
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   new SlashCommandBuilder()
     .setName("model")
-    .setDescription("View or change the AI model for this channel")
+    .setDescription("AI-Modell für diesen Channel anzeigen oder wechseln")
     .addStringOption((opt) =>
       opt
         .setName("action")
-        .setDescription("What to do")
+        .setDescription("Aktion")
         .addChoices(
-          { name: "Show current model", value: "current" },
-          { name: "List available models", value: "list" },
-          { name: "Set model", value: "set" }
+          { name: "Aktuelles Modell", value: "current" },
+          { name: "Verfügbare Modelle", value: "list" },
+          { name: "Modell setzen", value: "set" }
         )
     )
     .addStringOption((opt) =>
-      opt.setName("name").setDescription("Model ID to switch to (for set)").setAutocomplete(true)
+      opt.setName("name").setDescription("Modell-ID zum Wechseln").setAutocomplete(true)
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 ];
@@ -357,7 +357,7 @@ client.once(Events.ClientReady, async () => {
 
   // ── Bot Presence ────────────────────────────────────────────────────────
   client.user.setPresence({
-    activities: [{ name: `v${CURRENT_VERSION} · @me`, type: ActivityType.Watching }],
+    activities: [{ name: `v${CURRENT_VERSION} · 🖤`, type: ActivityType.Watching }],
     status: "online",
   });
 
@@ -375,8 +375,8 @@ function buildStartupEmbed({ envIssues, recoveryInfo } = {}) {
   const hasWarnings = envIssues?.warnings?.length > 0;
   const hasRecovery = recoveryInfo && (recoveryInfo.recoveredSessions > 0 || recoveryInfo.abortedTasks.length > 0);
 
-  const color = hasErrors ? 0xff0000 : (hasWarnings || hasRecovery) ? 0xffa500 : 0x2ecc71;
-  const title = hasErrors ? "\u26A0\uFE0F Bot Online — Configuration Errors" : hasRecovery ? "\u{1F7E1} Bot Online — Recovered" : "\u{1F7E2} Bot Online";
+  const color = hasErrors ? 0x8b0000 : (hasWarnings || hasRecovery) ? 0x71797e : 0x2d1b4e;
+  const title = hasErrors ? "\u{1F940} Online — Konfigurationsfehler" : hasRecovery ? "\u{1F940} Online — Recovered" : "\u{1F338} Nyx Online";
 
   const embed = new EmbedBuilder()
     .setTitle(title)
@@ -385,7 +385,7 @@ function buildStartupEmbed({ envIssues, recoveryInfo } = {}) {
 
   if (hasErrors) {
     embed.addFields({
-      name: "\u{1F534} Configuration Errors",
+      name: "\u{1FA78} Konfigurationsfehler",
       value: envIssues.errors.map((e) => `\u2022 ${e}`).join("\n").slice(0, 1024),
       inline: false,
     });
@@ -393,7 +393,7 @@ function buildStartupEmbed({ envIssues, recoveryInfo } = {}) {
 
   if (hasWarnings) {
     embed.addFields({
-      name: "\u{1F7E1} Warnings",
+      name: "\u{1F940} Warnungen",
       value: envIssues.warnings.map((w) => `\u2022 ${w}`).join("\n").slice(0, 1024),
       inline: false,
     });
@@ -402,17 +402,17 @@ function buildStartupEmbed({ envIssues, recoveryInfo } = {}) {
   if (hasRecovery) {
     const lines = [];
     if (recoveryInfo.recoveredSessions > 0) {
-      lines.push(`${recoveryInfo.recoveredSessions} interrupted session(s) reset to idle`);
+      lines.push(`${recoveryInfo.recoveredSessions} unterbrochene Session(s) zurückgesetzt`);
     }
     for (const t of recoveryInfo.abortedTasks.slice(0, 10)) {
       const snippet = t.prompt_snippet.length > 80 ? t.prompt_snippet.slice(0, 80) + "\u2026" : t.prompt_snippet;
-      lines.push(`\u{1F6D1} Aborted: ${snippet}`);
+      lines.push(`\u{1F480} Abgebrochen: ${snippet}`);
     }
     if (recoveryInfo.abortedTasks.length > 10) {
-      lines.push(`\u2026 and ${recoveryInfo.abortedTasks.length - 10} more`);
+      lines.push(`\u2026 und ${recoveryInfo.abortedTasks.length - 10} weitere`);
     }
     embed.addFields({
-      name: "\u{1F504} Recovered from Previous Crash",
+      name: "\u{1F52E} Recovery nach Crash",
       value: lines.join("\n").slice(0, 1024),
       inline: false,
     });
@@ -549,19 +549,19 @@ async function recoverFromPreviousErrors() {
       // ── Auto-retry: re-enqueue the task automatically ──────────────
       if (AUTO_RETRY_ON_CRASH) {
         const embed = new EmbedBuilder()
-          .setTitle("\u26A0\uFE0F Bot Restarted — Retrying Task")
-          .setColor(0xffa500)
+          .setTitle("\u{1F52E} Neustart — Retry")
+          .setColor(0x71797e)
           .setDescription(
-            `The bot was restarted and your running task was interrupted.\n\n` +
-            `**Aborted task:** ${snippet}\n\n` +
-            `\u{1F504} **Automatically re-submitting…**`
+            `Nyx wurde neugestartet und dein Task wurde unterbrochen.\n\n` +
+            `**Abgebrochen:** ${snippet}\n\n` +
+            `\u{1F52E} **Auto-Retry…**`
           )
           .setTimestamp();
         await ch.send({ embeds: [embed] });
 
         enqueueTask(task.channel_id, ch, task.prompt, ch, { id: task.user_id, tag: null }).catch((err) => {
           log.warn("Auto-retry failed", { channelId: task.channel_id, error: err.message });
-          ch.send(`\u274C Auto-retry failed: ${redactSecrets(err.message).clean}`).catch(() => {});
+          ch.send(`\u{1FA78} Auto-Retry fehlgeschlagen: ${redactSecrets(err.message).clean}`).catch(() => {});
         });
         log.info("Auto-retrying aborted task", { channelId: task.channel_id, taskId: task.task_id });
         continue;
@@ -570,19 +570,19 @@ async function recoverFromPreviousErrors() {
       // ── Manual retry: show button ──────────────────────────────────
       const retryId = `retry_task_${task.channel_id}_${Date.now()}`;
       const embed = new EmbedBuilder()
-        .setTitle("\u26A0\uFE0F Bot Restarted — Task Aborted")
-        .setColor(0xffa500)
+        .setTitle("\u{1F940} Neustart — Task abgebrochen")
+        .setColor(0x71797e)
         .setDescription(
-          `The bot was restarted and your running task was interrupted.\n\n` +
-          `**Aborted task:** ${snippet}\n\n` +
-          `Click the button below to re-submit, or send a new message.`
+          `Nyx wurde neugestartet und dein Task wurde unterbrochen.\n\n` +
+          `**Abgebrochen:** ${snippet}\n\n` +
+          `Drück den Button zum erneut einreichen, oder schreib was Neues~`
         )
         .setTimestamp();
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(retryId)
-          .setLabel("\u{1F504} Retry Task")
+          .setLabel("\u{1F52E} Retry")
           .setStyle(ButtonStyle.Primary),
       );
 
@@ -597,19 +597,19 @@ async function recoverFromPreviousErrors() {
           if (ADMIN_ROLE_IDS && i.member?.roles?.cache) {
             if ([...ADMIN_ROLE_IDS].some((id) => i.member.roles.cache.has(id))) return true;
           }
-          i.reply({ content: "\u26D4 Only the task author or an admin can retry.", flags: MessageFlags.Ephemeral }).catch(() => {});
+          i.reply({ content: "\u26D3\uFE0F Nur der Task-Autor oder ein Admin darf retryen.", flags: MessageFlags.Ephemeral }).catch(() => {});
           return false;
         },
         time: 600_000,
       }).then(async (btn) => {
         const retried = EmbedBuilder.from(embed)
-          .setTitle("\u{1F504} Retrying Task…")
-          .setColor(0x3498db)
-          .setFooter({ text: `Retried by ${btn.user.tag}` });
+          .setTitle("\u{1F52E} Retry…")
+          .setColor(0x2d1b4e)
+          .setFooter({ text: `Retry von ${btn.user.tag}` });
         await btn.update({ embeds: [retried], components: [] }).catch(() => {});
 
         enqueueTask(task.channel_id, ch, task.prompt, ch, { id: btn.user.id, tag: btn.user.tag }).catch((err) => {
-          ch.send(`\u274C Retry failed: ${redactSecrets(err.message).clean}`).catch(() => {});
+          ch.send(`\u{1FA78} Retry fehlgeschlagen: ${redactSecrets(err.message).clean}`).catch(() => {});
         });
         log.info("Task retried via button", { channelId: task.channel_id, user: btn.user.tag });
       }).catch(() => {
@@ -686,10 +686,10 @@ async function sendUpdateBanner(updateInfo) {
   _lastNotifiedVersion = updateInfo.latestVersion;
 
   const embed = new EmbedBuilder()
-    .setTitle("🚀 Update Available!")
-    .setColor(0xFFAA00)
+    .setTitle("⚔️ Update verfügbar!")
+    .setColor(0x2d1b4e)
     .setDescription(
-      `A new version of **Discord Autopilot** is ready!\n\n` +
+      `Neue Version von **Discord Autopilot** bereit!\n\n` +
       `\`v${updateInfo.currentVersion}\` → \`v${updateInfo.latestVersion}\``
     )
     .setTimestamp();
@@ -698,18 +698,18 @@ async function sendUpdateBanner(updateInfo) {
     const notes = updateInfo.releaseNotes.length > 500
       ? updateInfo.releaseNotes.slice(0, 497) + "…"
       : updateInfo.releaseNotes;
-    embed.addFields({ name: "📋 What's New", value: notes, inline: false });
+    embed.addFields({ name: "🗡️ What's New", value: notes, inline: false });
   }
 
   embed.addFields({
-    name: "💡 How to Update",
-    value: "Use `/update apply` in Discord, or run `--update` / `-Update` from the command line.",
+    name: "🔮 Update",
+    value: "Nutze `/update apply` in Discord, oder `--update` / `-Update` CLI~",
     inline: false,
   });
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setLabel("View Release")
+      .setLabel("👁️ Release")
       .setStyle(ButtonStyle.Link)
       .setURL(updateInfo.releaseUrl),
   );
@@ -785,7 +785,7 @@ client.on("interactionCreate", async (interaction) => {
 
   if (!isAllowed(interaction)) {
     await interaction.reply({
-      content: "⛔ You don't have permission to use this bot.",
+      content: "⛓️ Keine Berechtigung.",
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -793,7 +793,7 @@ client.on("interactionCreate", async (interaction) => {
 
   if (isRateLimited(interaction)) {
     await interaction.reply({
-      content: `⏳ Rate limited — max ${RATE_LIMIT_MAX} commands per ${Math.round(RATE_LIMIT_WINDOW_MS / 1000)}s. Please wait.`,
+      content: `🌙 Rate-Limit — max ${RATE_LIMIT_MAX} Commands pro ${Math.round(RATE_LIMIT_WINDOW_MS / 1000)}s. Warte kurz~`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -813,7 +813,7 @@ client.on("interactionCreate", async (interaction) => {
         // Basic sanity: must be absolute
         if (!grantPath.startsWith("/") && !grantPath.match(/^[A-Z]:\\/i)) {
           await interaction.reply({
-            content: "⚠️ Path must be absolute (e.g. `/home/user/data` or `C:\\Users\\...`).",
+            content: "🥀 Pfad muss absolut sein (z.B. `/home/user/data` oder `C:\\Users\\...`)~",
             flags: MessageFlags.Ephemeral,
           });
           break;
@@ -821,7 +821,7 @@ client.on("interactionCreate", async (interaction) => {
 
         const result = addGrant(channelId, grantPath, mode, ttl);
         await interaction.reply(
-          `✅ **Granted** \`${mode}\` access to \`${grantPath}\` for **${ttl} min** (expires <t:${Math.floor(new Date(result.expiresAt).getTime() / 1000)}:R>).`
+          `💜 **Granted** \`${mode}\` auf \`${grantPath}\` für **${ttl} min** (endet <t:${Math.floor(new Date(result.expiresAt).getTime() / 1000)}:R>)~`
         );
         break;
       }
@@ -830,7 +830,7 @@ client.on("interactionCreate", async (interaction) => {
       case "revoke": {
         const revokePath = interaction.options.getString("path");
         revokeGrant(channelId, revokePath);
-        await interaction.reply(`🔒 **Revoked** access to \`${revokePath}\`.`);
+        await interaction.reply(`⛓️ **Revoked** \`${revokePath}\`~`);
         break;
       }
 
@@ -838,7 +838,7 @@ client.on("interactionCreate", async (interaction) => {
       case "reset": {
         await interaction.deferReply();
         await resetSession(channelId);
-        await interaction.editReply("🔄 Session reset. @mention me or send a DM to start a new task.");
+        await interaction.editReply("� Session zurückgesetzt. @mention oder DM für neuen Task~");
         break;
       }
 
@@ -848,16 +848,16 @@ client.on("interactionCreate", async (interaction) => {
         const result = hardStop(channelId, clearQ);
         if (!result.found) {
           await interaction.reply({
-            content: "No active session to stop.",
+            content: "Keine aktive Session zum Stoppen~",
             flags: MessageFlags.Ephemeral,
           });
           break;
         }
         const parts = [];
-        if (result.wasWorking) parts.push("Aborted running task");
-        else parts.push("No task was running");
-        if (result.queueCleared > 0) parts.push(`cleared ${result.queueCleared} queued task(s)`);
-        await interaction.reply(`🛑 **Stopped.** ${parts.join(", ")}.`);
+        if (result.wasWorking) parts.push("Task abgebrochen");
+        else parts.push("Kein Task lief");
+        if (result.queueCleared > 0) parts.push(`${result.queueCleared} Task(s) aus Queue entfernt`);
+        await interaction.reply(`💀 **Gestoppt.** ${parts.join(", ")}~`);
         break;
       }
 
@@ -866,21 +866,21 @@ client.on("interactionCreate", async (interaction) => {
         const result = pauseSession(channelId);
         if (!result.found) {
           await interaction.reply({
-            content: "No active session to pause.",
+            content: "Keine aktive Session zum Pausieren~",
             flags: MessageFlags.Ephemeral,
           });
           break;
         }
         if (result.wasAlreadyPaused) {
           await interaction.reply({
-            content: "Session is already paused.",
+            content: "Session ist bereits pausiert~",
             flags: MessageFlags.Ephemeral,
           });
           break;
         }
         await interaction.reply(
-          "⏸ **Queue paused.** Current task (if any) will finish, but no new tasks will start.\n" +
-            "Use `/resume` to continue or `/stop` to abort the running task."
+          "🌑 **Queue pausiert.** Laufender Task endet, keine neuen starten.\n" +
+            "Nutze `/resume` zum Fortsetzen oder `/stop` zum Abbrechen~"
         );
         break;
       }
@@ -890,49 +890,49 @@ client.on("interactionCreate", async (interaction) => {
         const result = resumeSession(channelId, channel);
         if (!result.found) {
           await interaction.reply({
-            content: "No active session to resume.",
+            content: "Keine aktive Session zum Fortsetzen~",
             flags: MessageFlags.Ephemeral,
           });
           break;
         }
         if (!result.wasPaused) {
           await interaction.reply({
-            content: "Session was not paused.",
+            content: "Session war nicht pausiert~",
             flags: MessageFlags.Ephemeral,
           });
           break;
         }
-        await interaction.reply("▶️ **Queue resumed.** Pending tasks will now be processed.");
+        await interaction.reply("🌙 **Queue läuft.** Wartende Tasks werden jetzt verarbeitet~");
         break;
       }
 
       // ── /config ───────────────────────────────────────────────────────
       case "config": {
         const embed = new EmbedBuilder()
-          .setTitle("⚙️ Bot Configuration")
-          .setColor(0x95a5a6)
+          .setTitle("⚔️ Konfiguration")
+          .setColor(0x71797e)
           .addFields(
-            { name: "Project", value: PROJECT_NAME, inline: true },
-            { name: "Repo Path", value: `\`${REPO_PATH}\``, inline: true },
+            { name: "Projekt", value: PROJECT_NAME, inline: true },
+            { name: "Repo-Pfad", value: `\`${REPO_PATH}\``, inline: true },
             { name: "Base Root", value: `\`${BASE_ROOT}\``, inline: false },
             { name: "Workspaces Root", value: `\`${WORKSPACES_ROOT}\``, inline: false },
-            { name: "Default Model", value: DEFAULT_MODEL || "*(SDK default)*", inline: true },
+            { name: "Standard-Modell", value: DEFAULT_MODEL || "*(SDK Standard)*", inline: true },
             { name: "Edit Throttle", value: `${DISCORD_EDIT_THROTTLE_MS} ms`, inline: true },
-            { name: "Default Grant Mode", value: DEFAULT_GRANT_MODE, inline: true },
+            { name: "Standard Grant-Modus", value: DEFAULT_GRANT_MODE, inline: true },
             { name: "Default Grant TTL", value: `${DEFAULT_GRANT_TTL_MIN} min`, inline: true },
             {
-              name: "Guild Filter",
-              value: ALLOWED_GUILDS ? [...ALLOWED_GUILDS].join(", ") : "*(all)*",
+              name: "Guild-Filter",
+              value: ALLOWED_GUILDS ? [...ALLOWED_GUILDS].join(", ") : "*(alle)*",
               inline: false,
             },
             {
-              name: "Channel Filter",
-              value: ALLOWED_CHANNELS ? [...ALLOWED_CHANNELS].join(", ") : "*(all)*",
+              name: "Channel-Filter",
+              value: ALLOWED_CHANNELS ? [...ALLOWED_CHANNELS].join(", ") : "*(alle)*",
               inline: false,
             },
             {
-              name: "Admin Roles",
-              value: ADMIN_ROLE_IDS ? [...ADMIN_ROLE_IDS].join(", ") : "*(none — all users allowed)*",
+              name: "Admin-Rollen",
+              value: ADMIN_ROLE_IDS ? [...ADMIN_ROLE_IDS].join(", ") : "*(keine — alle User erlaubt)*",
               inline: false,
             },
             { name: "Task Timeout", value: `${Math.round(TASK_TIMEOUT_MS / 60_000)} min`, inline: true },
@@ -952,13 +952,13 @@ client.on("interactionCreate", async (interaction) => {
           const responders = getChannelResponders(channelId);
           if (responders.size === 0) {
             await interaction.reply({
-              content: "No responders configured — only admins can answer agent questions.",
+              content: "Keine Responder konfiguriert — nur Admins können antworten~",
               flags: MessageFlags.Ephemeral,
             });
           } else {
             const list = [...responders].map((id) => `<@${id}>`).join(", ");
             await interaction.reply({
-              content: `**Responders:** ${list}`,
+              content: `**Responder:** ${list}`,
               flags: MessageFlags.Ephemeral,
             });
           }
@@ -967,7 +967,7 @@ client.on("interactionCreate", async (interaction) => {
 
         if (!user) {
           await interaction.reply({
-            content: "⚠️ Please provide a user (`user` option).",
+            content: "🥀 Bitte einen User angeben (`user` Option)~",
             flags: MessageFlags.Ephemeral,
           });
           break;
@@ -975,10 +975,10 @@ client.on("interactionCreate", async (interaction) => {
 
         if (action === "add") {
           addChannelResponder(channelId, user.id);
-          await interaction.reply(`✅ <@${user.id}> can now answer agent questions in this channel.`);
+          await interaction.reply(`💜 <@${user.id}> darf jetzt auf Agent-Fragen antworten~`);
         } else if (action === "remove") {
           removeChannelResponder(channelId, user.id);
-          await interaction.reply(`🔒 <@${user.id}> removed as responder.`);
+          await interaction.reply(`⛓️ <@${user.id}> als Responder entfernt~`);
         }
         break;
       }
@@ -993,14 +993,14 @@ client.on("interactionCreate", async (interaction) => {
           try {
             const models = await listAvailableModels();
             if (!models || models.length === 0) {
-              await interaction.editReply("No models available.");
+              await interaction.editReply("Keine Modelle verfügbar~");
               break;
             }
             const lines = models.map((m) => {
               const effort = m.supportedReasoningEfforts?.length
                 ? ` · reasoning: ${m.supportedReasoningEfforts.join(", ")}`
                 : "";
-              const policy = m.policy?.state === "disabled" ? " ⛔" : "";
+              const policy = m.policy?.state === "disabled" ? " ⛓️" : "";
               return `**${m.name}** — \`${m.id}\`${effort}${policy}`;
             });
             let description = lines.join("\n");
@@ -1008,22 +1008,22 @@ client.on("interactionCreate", async (interaction) => {
               description = description.slice(0, 4000) + "\n…(truncated)";
             }
             const embed = new EmbedBuilder()
-              .setTitle("🤖 Available Models")
-              .setColor(0x3498db)
+              .setTitle("🔮 Verfügbare Modelle")
+              .setColor(0x2d1b4e)
               .setDescription(description)
               .setTimestamp();
             await interaction.editReply({ embeds: [embed] });
           } catch (err) {
-            await interaction.editReply(`❌ Failed to list models: ${redactSecrets(err.message).clean}`);
+            await interaction.editReply(`🩸 Modell-Liste fehlgeschlagen: ${redactSecrets(err.message).clean}`);
           }
           break;
         }
 
         if (action === "current") {
           const status = getSessionStatus(channelId);
-          const current = status?.model || DEFAULT_MODEL || "*(SDK default)*";
+          const current = status?.model || DEFAULT_MODEL || "*(SDK Standard)*";
           await interaction.reply({
-            content: `Current model: \`${current}\``,
+            content: `Aktuelles Modell: \`${current}\``,
             flags: MessageFlags.Ephemeral,
           });
           break;
@@ -1032,7 +1032,7 @@ client.on("interactionCreate", async (interaction) => {
         if (action === "set") {
           if (!modelName) {
             await interaction.reply({
-              content: "⚠️ Please provide a model ID (`name` option). Use `/model action:list` to see available models.",
+              content: "🥀 Modell-ID angeben (`name` Option). Nutze `/model action:list` für die Liste~",
               flags: MessageFlags.Ephemeral,
             });
             break;
@@ -1041,9 +1041,9 @@ client.on("interactionCreate", async (interaction) => {
           await interaction.deferReply();
           const result = await changeModel(channelId, channel, modelName);
           if (result.ok) {
-            await interaction.editReply(`✅ Model switched to \`${modelName}\`.`);
+            await interaction.editReply(`💜 Modell gewechselt zu \`${modelName}\`~`);
           } else {
-            await interaction.editReply(`❌ ${result.error}`);
+            await interaction.editReply(`🩸 ${result.error}`);
           }
           break;
         }
@@ -1060,9 +1060,9 @@ client.on("interactionCreate", async (interaction) => {
 
           if (result.error) {
             const embed = new EmbedBuilder()
-              .setTitle("❌ Update Check Failed")
-              .setColor(0xe74c3c)
-              .setDescription(`Could not check for updates: ${result.error}`)
+              .setTitle("🩸 Update-Check fehlgeschlagen")
+              .setColor(0x8b0000)
+              .setDescription(`Konnte nicht auf Updates prüfen: ${result.error}`)
               .setTimestamp();
             await interaction.editReply({ embeds: [embed] });
             break;
@@ -1070,10 +1070,10 @@ client.on("interactionCreate", async (interaction) => {
 
           if (result.available) {
             const embed = new EmbedBuilder()
-              .setTitle("🚀 Update Available!")
-              .setColor(0xFFAA00)
+              .setTitle("⚔️ Update verfügbar!")
+              .setColor(0x2d1b4e)
               .setDescription(
-                `A new version is ready!\n\n` +
+                `Neue Version bereit~\n\n` +
                 `\`v${result.currentVersion}\` → \`v${result.latestVersion}\``
               )
               .setTimestamp();
@@ -1082,18 +1082,18 @@ client.on("interactionCreate", async (interaction) => {
               const notes = result.releaseNotes.length > 800
                 ? result.releaseNotes.slice(0, 797) + "…"
                 : result.releaseNotes;
-              embed.addFields({ name: "📋 What's New", value: notes, inline: false });
+              embed.addFields({ name: "�️ What's New", value: notes, inline: false });
             }
 
             embed.addFields({
-              name: "💡 How to Update",
-              value: "Run `/update apply` to update and restart the bot.",
+              name: "� Update",
+              value: "Nutze `/update action:apply` zum Updaten~",
               inline: false,
             });
 
             const row = new ActionRowBuilder().addComponents(
               new ButtonBuilder()
-                .setLabel("View Release")
+                .setLabel("👁️ Release")
                 .setStyle(ButtonStyle.Link)
                 .setURL(result.releaseUrl),
             );
@@ -1101,9 +1101,9 @@ client.on("interactionCreate", async (interaction) => {
             await interaction.editReply({ embeds: [embed], components: [row] });
           } else {
             const embed = new EmbedBuilder()
-              .setTitle("✅ Up to Date")
-              .setColor(0x2ecc71)
-              .setDescription(`You're running the latest version: **v${result.currentVersion}**`)
+              .setTitle("💜 Aktuell")
+              .setColor(0x2d1b4e)
+              .setDescription(`Aktuellste Version: **v${result.currentVersion}**`)
               .setTimestamp();
             await interaction.editReply({ embeds: [embed] });
           }
@@ -1116,31 +1116,31 @@ client.on("interactionCreate", async (interaction) => {
 
           if (!check.available) {
             const embed = new EmbedBuilder()
-              .setTitle("✅ Already Up to Date")
-              .setColor(0x2ecc71)
-              .setDescription(`Running version **v${check.currentVersion || CURRENT_VERSION}** — no update needed.`)
+              .setTitle("💜 Bereits aktuell")
+              .setColor(0x2d1b4e)
+              .setDescription(`Version **v${check.currentVersion || CURRENT_VERSION}** — kein Update nötig~`)
               .setTimestamp();
             await interaction.editReply({ embeds: [embed] });
             break;
           }
 
           const confirmEmbed = new EmbedBuilder()
-            .setTitle("🔄 Confirm Update")
-            .setColor(0xFFAA00)
+            .setTitle("� Update bestätigen")
+            .setColor(0x71797e)
             .setDescription(
-              `Update from **v${check.currentVersion}** to **v${check.latestVersion}**?\n\n` +
-              `⚠️ The bot will restart after the update is applied.`
+              `Update von **v${check.currentVersion}** auf **v${check.latestVersion}**?\n\n` +
+              `🥀 Der Bot startet danach neu.`
             )
             .setTimestamp();
 
           const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
               .setCustomId("update_confirm")
-              .setLabel("✅ Update Now")
+              .setLabel("💜 Jetzt updaten")
               .setStyle(ButtonStyle.Success),
             new ButtonBuilder()
               .setCustomId("update_cancel")
-              .setLabel("Cancel")
+              .setLabel("Abbrechen")
               .setStyle(ButtonStyle.Secondary),
           );
 
@@ -1154,7 +1154,7 @@ client.on("interactionCreate", async (interaction) => {
 
             if (btn.customId === "update_cancel") {
               await btn.update({
-                embeds: [new EmbedBuilder().setTitle("❌ Update Cancelled").setColor(0x95a5a6).setTimestamp()],
+                embeds: [new EmbedBuilder().setTitle("🌑 Update abgebrochen").setColor(0x71797e).setTimestamp()],
                 components: [],
               });
               break;
@@ -1162,9 +1162,9 @@ client.on("interactionCreate", async (interaction) => {
 
             await btn.update({
               embeds: [new EmbedBuilder()
-                .setTitle("⏳ Downloading Update...")
-                .setColor(0x3498db)
-                .setDescription(`Downloading v${check.latestVersion}…`)
+                .setTitle("🌙 Download läuft…")
+                .setColor(0x2d1b4e)
+                .setDescription(`Lade v${check.latestVersion} herunter…`)
                 .setTimestamp()],
               components: [],
             });
@@ -1174,12 +1174,12 @@ client.on("interactionCreate", async (interaction) => {
             if (result.success) {
               await interaction.editReply({
                 embeds: [new EmbedBuilder()
-                  .setTitle("✅ Update Applied!")
-                  .setColor(0x2ecc71)
+                  .setTitle("💜 Update angewendet!")
+                  .setColor(0x2d1b4e)
                   .setDescription(
-                    `Updated to **v${result.version}**\n\n` +
-                    `🔄 **The bot will restart now.** It should be back online in a few seconds.\n\n` +
-                    `💾 Backup saved to \`${result.backupPath}\``
+                    `Aktualisiert auf **v${result.version}**\n\n` +
+                    `🔮 **Bot startet jetzt neu.** Sollte in wenigen Sekunden zurück sein~\n\n` +
+                    `🗡️ Backup: \`${result.backupPath}\``
                   )
                   .setTimestamp()],
                 components: [],
@@ -1188,16 +1188,16 @@ client.on("interactionCreate", async (interaction) => {
             } else {
               await interaction.editReply({
                 embeds: [new EmbedBuilder()
-                  .setTitle("❌ Update Failed")
-                  .setColor(0xe74c3c)
-                  .setDescription(`**Reason:** ${result.reason}\n\nThe bot continues running on the current version.`)
+                  .setTitle("🩸 Update fehlgeschlagen")
+                  .setColor(0x8b0000)
+                  .setDescription(`**Grund:** ${result.reason}\n\nBot läuft weiter auf der aktuellen Version.`)
                   .setTimestamp()],
                 components: [],
               });
             }
           } catch {
             await interaction.editReply({
-              embeds: [new EmbedBuilder().setTitle("⏰ Update Timed Out").setColor(0x95a5a6).setDescription("No response received. Update cancelled.").setTimestamp()],
+              embeds: [new EmbedBuilder().setTitle("🌑 Update-Timeout").setColor(0x71797e).setDescription("Keine Antwort erhalten. Update abgebrochen~").setTimestamp()],
               components: [],
             }).catch(() => {});
           }
@@ -1207,14 +1207,14 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       default:
-        await interaction.reply({ content: "Unknown command.", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "Unbekannter Command~", flags: MessageFlags.Ephemeral });
     }
   } catch (err) {
     log.error("Command error", { command: commandName, error: err.message });
     const reply = interaction.deferred || interaction.replied
       ? (msg) => interaction.editReply(msg)
       : (msg) => interaction.reply({ content: msg, flags: MessageFlags.Ephemeral });
-    await reply(`❌ Error: ${redactSecrets(err.message).clean}`).catch(() => {});
+    await reply(`🩸 Fehler: ${redactSecrets(err.message).clean}`).catch(() => {});
   }
 });
 
@@ -1229,7 +1229,7 @@ client.on("messageCreate", async (message) => {
   // Detect plain-text messages that look like slash commands (e.g. "/model", "/config")
   const slashMatch = message.content.trim().match(/^\/([\w-]+)/);
   if (slashMatch && KNOWN_COMMANDS.has(slashMatch[1])) {
-    message.reply(`💡 **\`/${slashMatch[1]}\`** is a slash command — type it in the message bar and pick it from the popup, or use it in a server channel (not as plain text).`).catch(() => {});
+    message.reply(`� **\`/${slashMatch[1]}\`** ist ein Slash-Command — tippe es in die Nachrichtenleiste und wähle es aus dem Popup~`).catch(() => {});
     return;
   }
 
@@ -1252,18 +1252,18 @@ client.on("messageCreate", async (message) => {
 
     // Rate-limit DM messages
     if (isDmRateLimited(userId)) {
-      message.react("⏳").catch(() => {});
+      message.react("🌙").catch(() => {});
       return;
     }
 
     const status = getSessionStatus(dmChannelId);
     log.info(status ? "Follow-up in DM" : "New task via DM", { channelId: dmChannelId, prompt: prompt.slice(0, 100) });
-    message.react("✅").catch(() => {});
+    message.react("🖤").catch(() => {});
 
     enqueueTask(dmChannelId, message.channel, prompt, message.channel, { id: userId, tag: message.author.tag }).catch((err) => {
       if (err._reportedByOutput) return;
       message.channel
-        .send(`❌ **Task failed:** ${redactSecrets(err.message).clean}`)
+        .send(`🩸 **Task fehlgeschlagen:** ${redactSecrets(err.message).clean}`)
         .catch(() => {});
     });
     return;
@@ -1282,19 +1282,19 @@ client.on("messageCreate", async (message) => {
     if (!prompt) return;
 
     if (isDmRateLimited(message.author.id)) {
-      message.react("⏳").catch(() => {});
+      message.react("🌙").catch(() => {});
       return;
     }
 
     const channelId = message.channel.id;
     log.info("New task via @mention", { channelId, prompt: prompt.slice(0, 100) });
-    message.react("✅").catch(() => {});
+    message.react("🖤").catch(() => {});
 
     // Create a thread for this task
     let outputChannel = message.channel;
     try {
       const thread = await message.startThread({
-        name: `Task: ${prompt.slice(0, 90)}`,
+        name: `🖤 ${prompt.slice(0, 90)}`,
         autoArchiveDuration: 1440,
       });
       outputChannel = thread;
@@ -1305,7 +1305,7 @@ client.on("messageCreate", async (message) => {
     enqueueTask(channelId, message.channel, prompt, outputChannel, { id: message.author.id, tag: message.author.tag }).catch((err) => {
       if (err._reportedByOutput) return;
       outputChannel
-        .send(`❌ **Task failed:** ${redactSecrets(err.message).clean}`)
+        .send(`🩸 **Task fehlgeschlagen:** ${redactSecrets(err.message).clean}`)
         .catch(() => {});
     });
     return;
@@ -1334,17 +1334,17 @@ client.on("messageCreate", async (message) => {
 
   // Rate-limit thread follow-ups
   if (isDmRateLimited(message.author.id)) {
-    message.react("⏳").catch(() => {});
+    message.react("🌙").catch(() => {});
     return;
   }
 
   log.info("Follow-up in thread", { channelId: parentId, threadId: message.channel.id, prompt: prompt.slice(0, 100) });
-  message.react("✅").catch(() => {});
+  message.react("🖤").catch(() => {});
 
   enqueueTask(parentId, parent, prompt, message.channel, { id: message.author.id, tag: message.author.tag }).catch((err) => {
     if (err._reportedByOutput) return;
     message.channel
-      .send(`❌ **Follow-up failed:** ${redactSecrets(err.message).clean}`)
+      .send(`🩸 **Follow-up fehlgeschlagen:** ${redactSecrets(err.message).clean}`)
       .catch(() => {});
   });
 });
@@ -1363,8 +1363,8 @@ async function shutdown(signal, exitCode = 0) {
 
   // Send shutdown notification before destroying the client
   const shutdownEmbed = new EmbedBuilder()
-    .setColor(0xe74c3c)
-    .setDescription(`\u{1F534} Offline — **${client.user?.tag ?? "Bot"}** (${signal})`);
+    .setColor(0x8b0000)
+    .setDescription(`🌑 Offline — **${client.user?.tag ?? "Bot"}** (${signal})`);
 
   let adminNotified = false;
   if (ADMIN_USER_ID) {
@@ -1432,10 +1432,10 @@ client.on("shardResume", async (shardId) => {
 
   // Reconnect notification — prefer admin DM, fallback to channel
   const reconnectEmbed = new EmbedBuilder()
-    .setTitle("\u{1F7E1} Bot Reconnected")
-    .setColor(0xf1c40f)
-    .setDescription(`**${client.user?.tag ?? "Bot"}** has reconnected after a brief disconnect.`)
-    .addFields({ name: "Project", value: PROJECT_NAME, inline: true })
+    .setTitle("🥀 Reconnected")
+    .setColor(0x71797e)
+    .setDescription(`**${client.user?.tag ?? "Bot"}** ist nach einem kurzen Disconnect zurück~`)
+    .addFields({ name: "Projekt", value: PROJECT_NAME, inline: true })
     .setTimestamp();
 
   let reconnectSent = false;

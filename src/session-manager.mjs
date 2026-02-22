@@ -163,7 +163,7 @@ async function _createSession(channelId, channel) {
   let copilotSession;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const botName = channel.client?.user?.username || "Autopilot";
+      const botName = channel.client?.user?.username || "Nyx";
       copilotSession = await createAgentSession({
     channelId,
     workspacePath,
@@ -179,8 +179,8 @@ async function _createSession(channelId, channel) {
       const target = ctx?.output?.channel || channel;
       target
         .send(
-          `⛔ **Access Denied**\n${reason}\n\n` +
-            `Use \`/grant path:<absolute-path> mode:ro ttl:30\` to allow access.`
+          `⛓️ **Zugriff verweigert**\n${reason}\n\n` +
+            `Nutze \`/grant path:<pfad> mode:ro ttl:30\` für Zugriff~`
         )
         .catch(() => {});
     },
@@ -194,8 +194,8 @@ async function _createSession(channelId, channel) {
       const ctx = sessions.get(channelId);
       if (!ctx) return;
       const count = ctx._toolsCompleted || 0;
-      const suffix = count > 0 ? `  · ${count} done` : "";
-      ctx.output?.status(`🔧 \`${toolName}\`…${suffix}`);
+      const suffix = count > 0 ? `  · ${count} fertig` : "";
+      ctx.output?.status(`⚔️ \`${toolName}\`…${suffix}`);
     },
 
     onToolComplete: (toolName, success, error) => {
@@ -203,11 +203,11 @@ async function _createSession(channelId, channel) {
       if (!ctx) return;
       ctx._toolsCompleted = (ctx._toolsCompleted || 0) + 1;
       if (!success && error) {
-        ctx.output?.append(`\n❌ \`${toolName}\`: ${error}\n`);
+        ctx.output?.append(`\n🩸 \`${toolName}\`: ${error}\n`);
       }
       const count = ctx._toolsCompleted;
-      const icon = success ? "✅" : "❌";
-      ctx.output?.status(`${icon} \`${toolName}\`  · ${count} tool${count !== 1 ? "s" : ""} done`);
+      const icon = success ? "✦" : "🩸";
+      ctx.output?.status(`${icon} \`${toolName}\`  · ${count} Tool${count !== 1 ? "s" : ""} fertig`);
     },
 
     onIdle: () => {
@@ -226,8 +226,8 @@ async function _createSession(channelId, channel) {
       // Post question in the output channel (thread) where the user sees output
       const target = ctx?.output?.channel || channel;
       await target.send(
-        `❓ **Agent asks:**\n${question}` +
-          (choices ? `\nOptions: ${choices.join(", ")}` : "")
+        `👁️ **Nyx fragt~**\n${question}` +
+          (choices ? `\nOptionen: ${choices.join(", ")}` : "")
       );
 
       try {
@@ -246,9 +246,9 @@ async function _createSession(channelId, channel) {
             return false;
           },
         });
-        return collected.first()?.content || "No answer provided.";
+        return collected.first()?.content || "Keine Antwort erhalten.";
       } catch {
-        return "No answer provided within timeout.";
+        return "Timeout — keine Antwort erhalten.";
       } finally {
         if (ctx) ctx.awaitingQuestion = false;
       }
@@ -337,13 +337,13 @@ export function getChannelResponders(channelId) {
  */
 export async function enqueueTask(channelId, channel, prompt, outputChannel, user) {
   if (prompt.length > MAX_PROMPT_LENGTH) {
-    throw new Error(`Prompt too long (${prompt.length}/${MAX_PROMPT_LENGTH} chars).`);
+    throw new Error(`Prompt zu lang (${prompt.length}/${MAX_PROMPT_LENGTH} Zeichen)~`);
   }
 
   const ctx = await getOrCreateSession(channelId, channel);
 
   if (ctx.queue.length >= MAX_QUEUE_SIZE) {
-    throw new Error(`Queue full (${MAX_QUEUE_SIZE} tasks max). Try again later.`);
+    throw new Error(`Queue voll (max ${MAX_QUEUE_SIZE} Tasks). Versuch's später~`);
   }
 
   return new Promise((resolve, reject) => {
@@ -397,14 +397,14 @@ async function processQueue(channelId, channel) {
       log.warn("Task timed out", { channelId, taskId: ctx.taskId, timeoutMs: TASK_TIMEOUT_MS });
       try { ctx.copilotSession.abort(); } catch {}
       completeTask(ctx.taskId, "aborted");
-      await ctx.output?.finish(`⏱ **Task timed out** after ${Math.round(TASK_TIMEOUT_MS / 60_000)} min.`);
+      await ctx.output?.finish(`🌑 **Timeout** nach ${Math.round(TASK_TIMEOUT_MS / 60_000)} min~`);
       ctx.status = "idle";
       updateSessionStatus(channelId, "idle");
     } else {
       completeTask(ctx.taskId, "failed");
       ctx.status = "idle";
       updateSessionStatus(channelId, "idle");
-      await ctx.output?.finish(`❌ **Error:** ${redactSecrets(err.message).clean}`);
+      await ctx.output?.finish(`🩸 **Fehler:** ${redactSecrets(err.message).clean}`);
     }
     err._reportedByOutput = true;
     reject(err);
@@ -489,7 +489,7 @@ export function hardStop(channelId, clearQueue = true) {
       completeTask(ctx.taskId, "aborted");
       ctx.taskId = null;
     }
-    ctx.output?.finish("🛑 **Task aborted by user.**");
+    ctx.output?.finish("� **Abgebrochen.**");
     // Don't null output synchronously — finish() is async and needs the reference
     // It will be nulled by processQueue's finally block
     ctx.status = "idle";
@@ -541,9 +541,9 @@ export function resumeSession(channelId, channel) {
  */
 export async function changeModel(channelId, channel, newModel) {
   const ctx = sessions.get(channelId);
-  if (!ctx) return { ok: false, error: "No active session." };
+  if (!ctx) return { ok: false, error: "Keine aktive Session~" };
   if (ctx.status === "working") {
-    return { ok: false, error: "Cannot switch models while a task is running. Use `/stop` first." };
+    return { ok: false, error: "Kann nicht wechseln während ein Task läuft. Erst `/stop`~" };
   }
 
   const oldModel = ctx.model;
@@ -554,7 +554,7 @@ export async function changeModel(channelId, channel, newModel) {
   // to avoid bricking ctx.copilotSession if the new one fails
   let newSession;
   try {
-    const botName = channel.client?.user?.username || "Autopilot";
+    const botName = channel.client?.user?.username || "Nyx";
     newSession = await createAgentSession({
       channelId,
       workspacePath: ctx.workspacePath,
@@ -570,8 +570,8 @@ export async function changeModel(channelId, channel, newModel) {
         const target = c?.output?.channel || channel;
         target
           .send(
-            `⛔ **Access Denied**\n${reason}\n\n` +
-              `Use \`/grant path:<absolute-path> mode:ro ttl:30\` to allow access.`
+            `⛓️ **Zugriff verweigert**\n${reason}\n\n` +
+              `Nutze \`/grant path:<pfad> mode:ro ttl:30\` für Zugriff~`
           )
           .catch(() => {});
       },
@@ -585,8 +585,8 @@ export async function changeModel(channelId, channel, newModel) {
         const c = sessions.get(channelId);
         if (!c) return;
         const count = c._toolsCompleted || 0;
-        const suffix = count > 0 ? `  · ${count} done` : "";
-        c.output?.status(`🔧 \`${toolName}\`…${suffix}`);
+        const suffix = count > 0 ? `  · ${count} fertig` : "";
+        c.output?.status(`⚔️ \`${toolName}\`…${suffix}`);
       },
 
       onToolComplete: (toolName, success, error) => {
@@ -594,11 +594,11 @@ export async function changeModel(channelId, channel, newModel) {
         if (!c) return;
         c._toolsCompleted = (c._toolsCompleted || 0) + 1;
         if (!success && error) {
-          c.output?.append(`\n❌ \`${toolName}\`: ${error}\n`);
+          c.output?.append(`\n🩸 \`${toolName}\`: ${error}\n`);
         }
         const count = c._toolsCompleted;
-        const icon = success ? "✅" : "❌";
-        c.output?.status(`${icon} \`${toolName}\`  · ${count} tool${count !== 1 ? "s" : ""} done`);
+        const icon = success ? "✦" : "🩸";
+        c.output?.status(`${icon} \`${toolName}\`  · ${count} Tool${count !== 1 ? "s" : ""} fertig`);
       },
 
       onIdle: () => {
@@ -616,8 +616,8 @@ export async function changeModel(channelId, channel, newModel) {
 
         const target = c?.output?.channel || channel;
         await target.send(
-          `❓ **Agent asks:**\n${question}` +
-            (choices ? `\nOptions: ${choices.join(", ")}` : "")
+          `👁️ **Nyx fragt~**\n${question}` +
+            (choices ? `\nOptionen: ${choices.join(", ")}` : "")
         );
 
         try {
@@ -636,9 +636,9 @@ export async function changeModel(channelId, channel, newModel) {
               return false;
             },
           });
-          return collected.first()?.content || "No answer provided.";
+          return collected.first()?.content || "Keine Antwort erhalten.";
         } catch {
-          return "No answer provided within timeout.";
+          return "Timeout — keine Antwort erhalten.";
         } finally {
           if (c) c.awaitingQuestion = false;
         }
@@ -648,7 +648,7 @@ export async function changeModel(channelId, channel, newModel) {
     // Rollback model on failure — old session is still alive
     ctx.model = oldModel;
     log.error("Failed to recreate session with new model", { channelId, model: newModel, error: err.message });
-    return { ok: false, error: `Failed to create session with model \`${newModel}\`: ${err.message}` };
+    return { ok: false, error: `Session mit \`${newModel}\` fehlgeschlagen: ${err.message}` };
   }
 
   // Success — destroy old session and swap in the new one

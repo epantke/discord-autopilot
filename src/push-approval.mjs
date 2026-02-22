@@ -63,14 +63,14 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
   const cleanCmd = redactSecrets(command.slice(0, 200)).clean;
 
   const embed = new EmbedBuilder()
-    .setTitle("🚀 Push Approval Required")
-    .setColor(0xff9900)
+    .setTitle("�️ Push Approval")
+    .setColor(0x71797e)
     .setDescription(
-      `The agent wants to execute:\n\`\`\`\n${cleanCmd}\n\`\`\``
+      `Nyx will ausführen:\n\`\`\`\n${cleanCmd}\n\`\`\``
     )
     .addFields(
-      { name: "Recent Commits", value: `\`\`\`\n${logSummary}\n\`\`\``, inline: false },
-      { name: "Diff Summary", value: `\`\`\`\n${diffSummary}\n\`\`\``, inline: false },
+      { name: "Letzte Commits", value: `\`\`\`\n${logSummary}\n\`\`\``, inline: false },
+      { name: "Diff", value: `\`\`\`\n${diffSummary}\n\`\`\``, inline: false },
       { name: "Branch", value: await getBranch(workspacePath), inline: true },
       { name: "Workspace", value: workspacePath, inline: true }
     )
@@ -79,11 +79,11 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("push_approve")
-      .setLabel("✅ Approve Push")
+      .setLabel("💜 Approve")
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId("push_reject")
-      .setLabel("❌ Reject Push")
+      .setLabel("🩸 Reject")
       .setStyle(ButtonStyle.Danger)
   );
 
@@ -102,7 +102,7 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
         // Deny-by-default: if neither ADMIN_USER_ID nor ADMIN_ROLE_IDS are configured,
         // nobody is allowed to approve pushes.
         if (!ADMIN_USER_ID && !ADMIN_ROLE_IDS) {
-          i.reply({ content: "\u26d4 No admin configured — push approval is disabled. Set ADMIN_USER_ID or ADMIN_ROLE_IDS.", flags: MessageFlags.Ephemeral }).catch(() => {});
+          i.reply({ content: "\u26d3\ufe0f Kein Admin konfiguriert — Push-Approval deaktiviert. Setze ADMIN_USER_ID oder ADMIN_ROLE_IDS.", flags: MessageFlags.Ephemeral }).catch(() => {});
           return false;
         }
         // In DMs (no member/roles), fall back to ADMIN_USER_ID check
@@ -110,12 +110,12 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
         if (!isAdminUser && ADMIN_ROLE_IDS) {
           const roles = i.member?.roles?.cache;
           if (!roles || ![...ADMIN_ROLE_IDS].some((id) => roles.has(id))) {
-            i.reply({ content: "\u26d4 You don't have permission to approve/reject pushes.", flags: MessageFlags.Ephemeral }).catch(() => {});
+            i.reply({ content: "\u26d3\ufe0f Keine Berechtigung für Push-Approval.", flags: MessageFlags.Ephemeral }).catch(() => {});
             return false;
           }
         }
         if (!isAdminUser && !ADMIN_ROLE_IDS) {
-          i.reply({ content: "\u26d4 You don't have permission to approve/reject pushes.", flags: MessageFlags.Ephemeral }).catch(() => {});
+          i.reply({ content: "\u26d3\ufe0f Keine Berechtigung für Push-Approval.", flags: MessageFlags.Ephemeral }).catch(() => {});
           return false;
         }
         return true;
@@ -126,8 +126,8 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
 
     collector.on("collect", async (interaction) => {
       const approved = interaction.customId === "push_approve";
-      const label = approved ? "✅ Push approved" : "❌ Push rejected";
-      const color = approved ? 0x00cc00 : 0xcc0000;
+      const label = approved ? "💜 Push approved" : "🩸 Push rejected";
+      const color = approved ? 0x2d1b4e : 0x8b0000;
 
       const updatedEmbed = EmbedBuilder.from(embed)
         .setColor(color)
