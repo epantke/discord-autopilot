@@ -65,6 +65,8 @@ irm https://github.com/epantke/discord-autopilot/releases/latest/download/agent.
 | `/update [check\|apply]` | Check for and apply bot updates |
 | `/pause` / `/resume` | Pause/resume queue processing |
 | `/responders [add\|remove\|list]` | Manage who can answer agent questions |
+| `/repo [set\|current\|reset]` | Switch repo for this channel |
+| `/branch [set\|current\|reset]` | Set base branch for new worktrees |
 
 </details>
 
@@ -78,7 +80,10 @@ irm https://github.com/epantke/discord-autopilot/releases/latest/download/agent.
 ❓ **Ask-User** — Agent asks clarifying questions and waits for your answer<br>
 🛡️ **Deny-by-Default** — All access outside workspace blocked unless granted<br>
 🔑 **Secret Scanner** — Auto-redacts tokens & keys before posting to Discord<br>
-💾 **Session Recovery** — Sessions & grants survive restarts (SQLite)
+💾 **Session Recovery** — Sessions & grants survive restarts (SQLite)<br>
+🔄 **Auto-Updater** — Checks for new releases, downloads & restarts automatically<br>
+📂 **Multi-Repo** — Switch repos per channel with `/repo` — clones on demand<br>
+🌿 **Branch Overrides** — Set a custom base branch per channel with `/branch`
 
 ## Security
 
@@ -109,6 +114,9 @@ Deny-by-default — all file/shell access outside the workspace is blocked. Push
 | `TASK_TIMEOUT_MS` | `1800000` | Task timeout (30 min) |
 | `AUTO_APPROVE_PUSH` | `false` | Auto-approve `git push` |
 | `AUTO_RETRY_ON_CRASH` | `false` | Re-enqueue tasks after crash |
+| `DEFAULT_BRANCH` | _(none)_ | Base branch for new worktrees (default: remote HEAD) |
+| `SESSION_KEEPALIVE_MS` | `0` | Keepalive interval for Copilot sessions (0 = disabled) |
+| `PAUSE_GRACE_MS` | `3600000` | Grace period before paused sessions are swept (1h) |
 | `BASE_ROOT` | `~/.local/share/discord-agent` | Base directory for all data |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 

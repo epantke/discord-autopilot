@@ -100,7 +100,7 @@
       <div class="feature-card reveal">
         <span class="feature-icon">💬</span>
         <h3>DM &amp; @mention</h3>
-        <p>@mention the bot in a channel or DM it directly. Reply in threads for follow-ups. 10 admin slash commands for control.</p>
+        <p>@mention the bot in a channel or DM it directly. Reply in threads for follow-ups. 12 admin slash commands for control.</p>
       </div>
       <div class="feature-card reveal">
         <span class="feature-icon">👥</span>
@@ -137,6 +137,21 @@
         <h3>Self-Aware Agent</h3>
         <p>The bot knows its own capabilities and can explain them when asked. Ask "what can you do?" and it answers.</p>
       </div>
+      <div class="feature-card reveal">
+        <span class="feature-icon">🔄</span>
+        <h3>Auto-Updater</h3>
+        <p>Checks for new releases on GitHub, downloads the update, waits for idle, and restarts automatically.</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-icon">📂</span>
+        <h3>Multi-Repo</h3>
+        <p>Switch repos per channel with <code>/repo</code>. Clones on demand, each channel can work on a different project.</p>
+      </div>
+      <div class="feature-card reveal">
+        <span class="feature-icon">🌿</span>
+        <h3>Branch Overrides</h3>
+        <p>Set a custom base branch per channel with <code>/branch</code>. New worktrees fork from the configured branch.</p>
+      </div>
     </div>
   </section>
 
@@ -172,7 +187,7 @@
   <section class="section" id="commands">
     <div class="reveal">
       <div class="section-label">Interaction</div>
-      <h2 class="section-title">@mention + DMs + 10 admin commands</h2>
+      <h2 class="section-title">@mention + DMs + 12 admin commands</h2>
       <p class="section-desc">@mention the bot or DM it to submit work. Reply in threads for follow-ups. Admin slash commands for control.</p>
     </div>
 
@@ -219,6 +234,8 @@
             <tr><td><code>/pause</code></td><td>Pause queue processing †</td></tr>
             <tr><td><code>/resume</code></td><td>Resume queue processing †</td></tr>
             <tr><td><code>/responders [add|remove|list]</code></td><td>Manage who can answer agent questions †</td></tr>
+            <tr><td><code>/repo [set|current|reset]</code></td><td>Switch repo for this channel †</td></tr>
+            <tr><td><code>/branch [set|current|reset]</code></td><td>Set base branch for new worktrees †</td></tr>
           </tbody>
         </table>
         <p style="color: var(--text-muted); font-size: 0.8rem; margin-top: 8px;">† Requires Manage Guild permission</p>
@@ -265,7 +282,7 @@
     <div class="reveal">
       <div class="section-label">Configuration</div>
       <h2 class="section-title">Environment variables</h2>
-      <p class="section-desc">Set via <code>.env</code> file or export directly. Only two are required.</p>
+      <p class="section-desc">Set via <code>.env</code> file or export directly. Only one is required.</p>
     </div>
 
     <div class="reveal">
@@ -279,6 +296,21 @@
             <tbody>
               <tr><td><code>DISCORD_TOKEN</code></td><td>Your Discord bot token</td></tr>
               <tr><td><code>REPO_URL</code></td><td>Repository URL to clone (or set interactively)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details>
+        <summary>Model &amp; Branch</summary>
+        <div class="config-body">
+          <table>
+            <thead>
+              <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>DEFAULT_MODEL</code></td><td><code>claude-opus-4.6</code></td><td>AI model (e.g. <code>claude-sonnet-4.6</code>, <code>gpt-4o</code>)</td></tr>
+              <tr><td><code>DEFAULT_BRANCH</code></td><td>—</td><td>Base branch for new worktrees (default: remote HEAD)</td></tr>
             </tbody>
           </table>
         </div>
@@ -333,6 +365,8 @@
               <tr><td><code>RATE_LIMIT_MAX</code></td><td>10</td><td>Max messages per window (admins exempt)</td></tr>
               <tr><td><code>AUTO_APPROVE_PUSH</code></td><td>false</td><td>Auto-approve <code>git push</code> without Discord confirmation</td></tr>
               <tr><td><code>AUTO_RETRY_ON_CRASH</code></td><td>false</td><td>Re-enqueue tasks aborted by a crash/restart</td></tr>
+              <tr><td><code>SESSION_KEEPALIVE_MS</code></td><td>0</td><td>Keepalive interval for Copilot sessions (0 = disabled)</td></tr>
+              <tr><td><code>PAUSE_GRACE_MS</code></td><td>3600000</td><td>Grace period before paused sessions are swept (1h)</td></tr>
             </tbody>
           </table>
         </div>
