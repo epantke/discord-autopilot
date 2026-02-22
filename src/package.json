@@ -11,8 +11,8 @@
     "undici": "6.23.0"
   },
   "dependencies": {
-    "discord.js": "^14.16.0",
     "@github/copilot-sdk": "^0.1.25",
-    "better-sqlite3": "^11.0.0"
+    "better-sqlite3": "^12.6.2",
+    "discord.js": "^14.16.0"
   }
 }
