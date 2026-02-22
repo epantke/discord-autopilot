@@ -183,6 +183,14 @@ async function _cloneRepoInner(cloneUrl, projectName) {
   }
 
   await execFileAsync("git", ["clone", authUrl, repoPath], { timeout: 120_000 });
+
+  // Strip auth token from persisted remote URL to avoid leaking it on disk
+  if (authUrl !== cloneUrl) {
+    try {
+      await execFileAsync("git", ["-C", repoPath, "remote", "set-url", "origin", cloneUrl], { timeout: 5_000 });
+    } catch { /* best effort — clone succeeded, remote URL is cosmetic */ }
+  }
+
   log.info("Repo cloned", { projectName, repoPath });
   return repoPath;
 }
@@ -471,6 +479,8 @@ function _buildSessionHooks(channelId, channel) {
     },
 
     onIdle: () => {
+      // Skip stale events from destroyed/reset sessions
+      if (!sessions.has(channelId)) return;
       const ctx = sessions.get(channelId);
       if (ctx) {
         ctx.output?.finish("🖤 **Fertig~**");
@@ -730,12 +740,17 @@ async function processQueue(channelId, channel) {
     if (ctx._aborted) {
       ctx._aborted = false;
     } else if (err.message?.includes("Timeout") && err.message?.includes("session.idle")) {
-      log.warn("Task timed out", { channelId, taskId: ctx.taskId, timeoutMs: TASK_TIMEOUT_MS });
-      try { ctx.copilotSession.abort(); } catch {}
-      if (ctx.taskId) completeTask(ctx.taskId, "aborted");
-      await ctx.output?.finish(`🌑 **Timeout** nach ${Math.round(TASK_TIMEOUT_MS / 60_000)} min~`);
-      ctx.status = "idle";
-      updateSessionStatus(channelId, "idle");
+      // Guard: if /stop already handled this task, skip duplicate cleanup
+      if (!ctx._aborted) {
+        log.warn("Task timed out", { channelId, taskId: ctx.taskId, timeoutMs: TASK_TIMEOUT_MS });
+        try { ctx.copilotSession.abort(); } catch {}
+        if (ctx.taskId) completeTask(ctx.taskId, "aborted");
+        await ctx.output?.finish(`🌑 **Timeout** nach ${Math.round(TASK_TIMEOUT_MS / 60_000)} min~`);
+        ctx.status = "idle";
+        updateSessionStatus(channelId, "idle");
+      } else {
+        ctx._aborted = false;
+      }
     } else {
       if (ctx.taskId) completeTask(ctx.taskId, "failed");
       ctx.status = "idle";

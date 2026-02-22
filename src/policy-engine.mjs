@@ -221,11 +221,11 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
           gate: "outside",
         };
       }
-      // Block cd with shell variables — cannot statically resolve
-      if (rawTarget.startsWith("$") || rawTarget.includes("${")) {
+      // Block cd with shell variables or command substitution — cannot statically resolve
+      if (rawTarget.startsWith("$") || rawTarget.includes("${") || rawTarget.includes("$(") || rawTarget.includes("`")) {
         return {
           decision: "deny",
-          reason: `Shell cd with variable expansion is not allowed: ${rawTarget}`,
+          reason: `Shell cd with variable/command expansion is not allowed: ${rawTarget}`,
           gate: "outside",
         };
       }

@@ -265,7 +265,7 @@ function isAdmin(interaction) {
   if (ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID) return true;
   // DM users without ADMIN_USER_ID match are not admins
   if (!interaction.guildId) return false;
-  if (!ADMIN_ROLE_IDS) return true;
+  if (!ADMIN_ROLE_IDS) return false;
   return hasAnyRole(interaction.member, ADMIN_ROLE_IDS);
 }
 

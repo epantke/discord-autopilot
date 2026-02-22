@@ -53,7 +53,9 @@ export function addGrant(channelId, grantPath, mode, ttlMinutes) {
   }
 
   const expiry = Date.now() + ttlMinutes * 60_000;
-  const expiresAt = new Date(expiry).toISOString();
+  // Use SQLite-compatible datetime format (space separator, no trailing Z)
+  // so that deleteExpiredGrants WHERE expires_at <= datetime('now') works correctly
+  const expiresAt = new Date(expiry).toISOString().replace("T", " ").replace("Z", "");
 
   // Persist to DB
   upsertGrant(channelId, grantPath, mode, expiresAt);
