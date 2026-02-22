@@ -194,12 +194,13 @@ function runMigrations() {
 
   // Future migrations go here as `if (v < 7) { ... setSchemaVersion(7); }`
   } catch (migrationErr) {
-    log.error("Migration failed — backing up DB and continuing with current schema", { error: migrationErr.message });
+    log.error("Migration failed — cannot start with inconsistent schema", { error: migrationErr.message });
     try {
       const backupPath = STATE_DB_PATH + ".pre-migration." + Date.now();
       copyFileSync(STATE_DB_PATH, backupPath);
       log.info("Pre-migration DB backed up", { path: backupPath });
     } catch { /* best effort */ }
+    process.exit(1);
   }
 }
 
@@ -368,10 +369,6 @@ const stmtUpsertRepoOverride = db.prepare(`
     set_at       = datetime('now')
 `);
 
-const stmtGetRepoOverride = db.prepare(
-  `SELECT * FROM repo_overrides WHERE channel_id = ?`
-);
-
 const stmtDeleteRepoOverride = db.prepare(
   `DELETE FROM repo_overrides WHERE channel_id = ?`
 );
@@ -380,10 +377,6 @@ const stmtAllRepoOverrides = db.prepare(`SELECT * FROM repo_overrides`);
 
 export function upsertRepoOverride(channelId, repoUrl, repoPath, projectName) {
   stmtUpsertRepoOverride.run({ channelId, repoUrl, repoPath, projectName });
-}
-
-export function getRepoOverride(channelId) {
-  return stmtGetRepoOverride.get(channelId) || null;
 }
 
 export function deleteRepoOverride(channelId) {
@@ -403,10 +396,6 @@ const stmtUpsertBranchOverride = db.prepare(`
     set_at      = datetime('now')
 `);
 
-const stmtGetBranchOverride = db.prepare(
-  `SELECT * FROM branch_overrides WHERE channel_id = ?`
-);
-
 const stmtDeleteBranchOverride = db.prepare(
   `DELETE FROM branch_overrides WHERE channel_id = ?`
 );
@@ -415,10 +404,6 @@ const stmtAllBranchOverrides = db.prepare(`SELECT * FROM branch_overrides`);
 
 export function upsertBranchOverride(channelId, baseBranch) {
   stmtUpsertBranchOverride.run({ channelId, baseBranch });
-}
-
-export function getBranchOverride(channelId) {
-  return stmtGetBranchOverride.get(channelId) || null;
 }
 
 export function deleteBranchOverride(channelId) {

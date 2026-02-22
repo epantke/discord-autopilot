@@ -5,7 +5,7 @@ import { CURRENT_VERSION, AGENT_SCRIPT_PATH, GITHUB_TOKEN } from "./config.mjs";
 const log = createLogger("updater");
 
 const REPO_OWNER = (process.env.UPDATE_REPO_OWNER || "epantke").trim();
-const REPO_NAME = (process.env.UPDATE_REPO_NAME || "remote-coding-agent").trim();
+const REPO_NAME = (process.env.UPDATE_REPO_NAME || "discord-autopilot").trim();
 
 let _cachedResult = null;
 let _cachedAt = 0;

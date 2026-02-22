@@ -114,8 +114,8 @@ function extractSubCommands(command) {
     let remaining = part;
     let depth = 0;
     let start = -1;
-    for (let i = 0; i < remaining.length - 1; i++) {
-      if (remaining[i] === "$" && remaining[i + 1] === "(") {
+    for (let i = 0; i < remaining.length; i++) {
+      if (i + 1 < remaining.length && remaining[i] === "$" && remaining[i + 1] === "(") {
         if (depth === 0) start = i + 2;
         depth++;
         i++; // skip '('
@@ -141,6 +141,11 @@ function isGitPushCommand(command) {
   if (DANGEROUS_WRAPPERS.test(command) && /\bgit\b/i.test(command) && /\bpush\b/i.test(command)) return true;
   // Detect env-variable prefix pattern: VAR=val git push
   if (/\b\w+=\S+\s+git\s+push\b/i.test(command)) return true;
+  // Detect git config alias that references push-related commands (bypass via alias)
+  if (/\bgit\s+config\b[^;&|\n]*\balias\.\w+\s.*?\b(?:push|pr\s+create|pr\s+merge)\b/i.test(command)) return true;
+  // Detect git with dynamic subcommand via variable/command expansion (can't verify statically)
+  if (/\bgit\b[^;&|\n]*\$[\w{(]/i.test(command)) return true;
+  if (/\bgit\b[^;&|\n]*`/i.test(command)) return true;
   return parts.some((part) =>
     GIT_PUSH_PATTERNS.some((re) => re.test(part))
   );
@@ -168,6 +173,48 @@ function isGranted(targetPath, grants, requiredMode = "ro") {
     if (requiredMode === "rw" && grant.mode === "rw") return true;
   }
   return false;
+}
+
+// ── Shell File Access Scanning ──────────────────────────────────────────────
+
+const SAFE_PATHS_RE = /^\/dev\/(null|stdin|stdout|stderr|urandom|random|zero|tty|fd\/\d+)$/;
+
+/**
+ * Scan a shell command for file operations targeting paths outside the workspace.
+ * Returns { path, reason } if a violation is found, or null if clean.
+ */
+function checkShellFileAccess(command, workspaceRoot, grants) {
+  // 1. File-reading commands with absolute path arguments
+  const readRe = /\b(?:cat|tac|less|more|head|tail|sort|uniq|wc|nl|od|xxd|strings|base64|file|stat|type)\s+(?:(?:-[\w=]+)\s+)*(?:"(\/[^"]+)"|\'(\/[^\']+)\'|(\/[^\s;&|><"'`]+))/gi;
+  for (const m of command.matchAll(readRe)) {
+    const p = m[1] || m[2] || m[3];
+    if (!p || SAFE_PATHS_RE.test(p)) continue;
+    if (!isInsideWorkspace(p, workspaceRoot) && !isGranted(p, grants, "ro")) {
+      return { path: p, reason: `Shell file read outside workspace denied: ${p}` };
+    }
+  }
+
+  // 2. Output redirection to absolute paths outside workspace
+  const redirectRe = />{1,2}\s*(?:"(\/[^"]+)"|\'(\/[^\']+)\'|(\/[^\s;&|><"'`]+))/g;
+  for (const m of command.matchAll(redirectRe)) {
+    const p = m[1] || m[2] || m[3];
+    if (!p || SAFE_PATHS_RE.test(p)) continue;
+    if (!isInsideWorkspace(p, workspaceRoot) && !isGranted(p, grants, "rw")) {
+      return { path: p, reason: `Shell file write (redirect) outside workspace denied: ${p}` };
+    }
+  }
+
+  // 3. curl/wget data exfiltration with file reference (@file)
+  const exfilRe = /\b(?:curl|wget)\b[^;&|]*?(?:-[dF]\s*@|--data[-\w]*[\s=]+@|--upload-file\s+)(?:"(\/[^"]+)"|\'(\/[^\']+)\'|(\/[^\s;&|><"'`]+))/gi;
+  for (const m of command.matchAll(exfilRe)) {
+    const p = m[1] || m[2] || m[3];
+    if (!p || SAFE_PATHS_RE.test(p)) continue;
+    if (!isInsideWorkspace(p, workspaceRoot) && !isGranted(p, grants, "ro")) {
+      return { path: p, reason: `Data exfiltration via file upload denied: ${p}` };
+    }
+  }
+
+  return null;
 }
 
 // ── Tool Name Classification ────────────────────────────────────────────────
@@ -261,8 +308,8 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
           gate: "outside",
         };
       }
-      // Block tilde expansion — shell expands ~ to home dir, bypassing resolve()
-      if (rawTarget === "~" || rawTarget.startsWith("~/")) {
+      // Block tilde expansion — shell expands ~ / ~/ / ~user to home dirs, bypassing resolve()
+      if (rawTarget.startsWith("~")) {
         return {
           decision: "deny",
           reason: `Shell cd with tilde expansion is not allowed: ${rawTarget}`,
@@ -285,6 +332,17 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
           gate: "outside",
         };
       }
+    }
+
+    // Check for file operations on paths outside workspace
+    const fileAccess = checkShellFileAccess(cmd, workspaceRoot, grants);
+    if (fileAccess) {
+      log.warn("Shell file access denied", { command: cmd, path: fileAccess.path });
+      return {
+        decision: "deny",
+        reason: fileAccess.reason,
+        gate: "outside",
+      };
     }
 
     return { decision: "allow" };

@@ -21,6 +21,7 @@ import {
   ALLOWED_GUILDS,
   ALLOWED_CHANNELS,
   ADMIN_ROLE_IDS,
+  ALLOWED_ROLE_IDS,
   ALLOWED_DM_USERS,
   PROJECT_NAME,
   DISCORD_EDIT_THROTTLE_MS,
@@ -40,6 +41,7 @@ import {
   CURRENT_VERSION,
   UPDATE_CHECK_INTERVAL_MS,
   AUTO_RETRY_ON_CRASH,
+  AUTO_UPDATE,
 } from "./config.mjs";
 
 import {
@@ -252,11 +254,19 @@ function isAllowed(interaction) {
   }
 
   if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(interaction.guildId)) return false;
-  if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(interaction.channelId)) return false;
+  if (ALLOWED_CHANNELS) {
+    // For threads, check the parent channel ID (sessions are keyed by parent channel)
+    const checkId = interaction.channel?.isThread?.() ? interaction.channel.parentId : interaction.channelId;
+    if (!ALLOWED_CHANNELS.has(checkId)) return false;
+  }
   // ADMIN_USER_ID always has access, even without admin roles
   if (ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID) return true;
-  if (ADMIN_ROLE_IDS) {
-    if (!hasAnyRole(interaction.member, ADMIN_ROLE_IDS)) return false;
+  // ALLOWED_ROLE_IDS gates general access; falls back to ADMIN_ROLE_IDS for backward compat.
+  // Admin role holders always pass (admins are a superset of allowed users).
+  const accessRoles = ALLOWED_ROLE_IDS || ADMIN_ROLE_IDS;
+  if (accessRoles) {
+    if (ADMIN_ROLE_IDS && hasAnyRole(interaction.member, ADMIN_ROLE_IDS)) return true;
+    if (!hasAnyRole(interaction.member, accessRoles)) return false;
   }
   return true;
 }
@@ -312,9 +322,12 @@ function isRateLimited(interaction) {
 /**
  * Lightweight rate-limiter for messageCreate follow-ups (DMs + threads).
  * Reuses the same window/max as slash commands.
+ * @param {string} userId
+ * @param {import("discord.js").GuildMember|null} [member] - Guild member (for role-based admin bypass)
  */
-function isDmRateLimited(userId) {
+function isDmRateLimited(userId, member) {
   if (ADMIN_USER_ID && userId === ADMIN_USER_ID) return false;
+  if (ADMIN_ROLE_IDS && member && hasAnyRole(member, ADMIN_ROLE_IDS)) return false;
   const now = Date.now();
   let timestamps = rateLimitMap.get(userId);
   if (!timestamps) {
@@ -424,7 +437,7 @@ client.once(Events.ClientReady, async () => {
     status: "online",
   });
 
-  startUpdateChecker();
+  if (AUTO_UPDATE) startUpdateChecker();
 });
 
 /** Build the startup embed once and reuse for channel + DM. */
@@ -792,8 +805,14 @@ async function performAutoUpdate(updateInfo) {
     const start = Date.now();
     while (hasWorkingSessions()) {
       if (Date.now() - start > maxWait) {
-        log.warn("Auto-update: timed out waiting for idle sessions — proceeding anyway");
-        break;
+        log.warn("Auto-update: timed out waiting for idle sessions — deferring update");
+        _autoUpdateInProgress = false;
+        _lastNotifiedVersion = null;
+        await notifyUpdate(
+          `⏳ Update to **v${updateInfo.latestVersion}** deferred — active sessions did not finish within ${Math.round(maxWait / 60_000)} min.\nWill retry on next check cycle.`,
+          { color: 0xFFAA00, title: "⏳ Update Deferred" }
+        );
+        return;
       }
       await new Promise((r) => { const t = setTimeout(r, 10_000); t.unref(); });
     }
@@ -857,8 +876,12 @@ function startUpdateChecker() {
 // ── Interaction Handler ─────────────────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
-  // Model name autocomplete
+  // Model name autocomplete — enforce access control before responding
   if (interaction.isAutocomplete()) {
+    if (!isAllowed(interaction) || !isAdmin(interaction)) {
+      await interaction.respond([]).catch(() => {});
+      return;
+    }
     if (interaction.commandName === "model") {
       const focused = interaction.options.getFocused();
       try {
@@ -895,8 +918,11 @@ client.on("interactionCreate", async (interaction) => {
     return;
   }
 
-  const { commandName, channelId } = interaction;
-  const channel = interaction.channel;
+  const { commandName } = interaction;
+  // For threads, use parent channel ID as session key (sessions are keyed by parent channel)
+  const isInThread = interaction.channel?.isThread?.();
+  const channelId = isInThread ? (interaction.channel.parentId || interaction.channelId) : interaction.channelId;
+  const channel = isInThread ? (interaction.channel.parent ?? interaction.channel) : interaction.channel;
 
   // Admin-only commands require isAdmin() — setDefaultMemberPermissions is not enforced in DMs
   const ADMIN_COMMANDS = new Set(["grant", "revoke", "stop", "reset", "model", "config", "pause", "resume", "responders", "update", "repo", "branch"]);
@@ -925,9 +951,10 @@ client.on("interactionCreate", async (interaction) => {
           break;
         }
 
-        const result = addGrant(channelId, grantPath, mode, ttl);
+        addGrant(channelId, grantPath, mode, ttl);
+        const expiryEpoch = Math.floor(Date.now() / 1000) + ttl * 60;
         await interaction.reply(
-          `💜 **Granted** \`${mode}\` auf \`${grantPath}\` für **${ttl} min** (endet <t:${Math.floor(new Date(result.expiresAt).getTime() / 1000)}:R>)~`
+          `💜 **Granted** \`${mode}\` auf \`${grantPath}\` für **${ttl} min** (endet <t:${expiryEpoch}:R>)~`
         );
         break;
       }
@@ -1154,7 +1181,6 @@ client.on("interactionCreate", async (interaction) => {
           }
           break;
         }
-        break;
       }
 
       // ── /update ───────────────────────────────────────────────────────
@@ -1204,6 +1230,12 @@ client.on("interactionCreate", async (interaction) => {
 
         if (action === "apply") {
           await interaction.deferReply();
+
+          if (_autoUpdateInProgress) {
+            await interaction.editReply("🔄 Ein Auto-Update läuft bereits — bitte warten~");
+            break;
+          }
+
           const check = await checkForUpdate({ force: true });
 
           if (!check.available) {
@@ -1250,7 +1282,6 @@ client.on("interactionCreate", async (interaction) => {
           }
           break;
         }
-        break;
       }
 
       // ── /repo ────────────────────────────────────────────────────────────
@@ -1303,7 +1334,6 @@ client.on("interactionCreate", async (interaction) => {
           }
           break;
         }
-        break;
       }
 
       // ── /branch ──────────────────────────────────────────────────────────
@@ -1358,7 +1388,6 @@ client.on("interactionCreate", async (interaction) => {
           }
           break;
         }
-        break;
       }
 
       default:
@@ -1405,8 +1434,8 @@ client.on("messageCreate", async (message) => {
     const prompt = message.content.trim();
     if (!prompt) return;
 
-    // Rate-limit DM messages
-    if (isDmRateLimited(userId)) {
+    // Rate-limit DM messages (DMs have no member/roles)
+    if (isDmRateLimited(userId, null)) {
       message.react("🌙").catch(() => {});
       return;
     }
@@ -1428,7 +1457,8 @@ client.on("messageCreate", async (message) => {
   if (!message.channel.isThread() && message.mentions.has(client.user)) {
     if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(message.guildId)) return;
     if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(message.channel.id)) return;
-    if (ADMIN_ROLE_IDS && !(ADMIN_USER_ID && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
+    const mentionRoles = ALLOWED_ROLE_IDS || ADMIN_ROLE_IDS;
+    if (mentionRoles && !(ADMIN_USER_ID && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, mentionRoles)) return;
 
     // Strip the bot mention from the prompt
     const prompt = message.content
@@ -1436,7 +1466,7 @@ client.on("messageCreate", async (message) => {
       .trim();
     if (!prompt) return;
 
-    if (isDmRateLimited(message.author.id)) {
+    if (isDmRateLimited(message.author.id, message.member)) {
       message.react("🌙").catch(() => {});
       return;
     }
@@ -1469,24 +1499,29 @@ client.on("messageCreate", async (message) => {
   // ── Thread follow-ups (guild channels)
   if (!message.channel.isThread()) return;
 
-  const parent = message.channel.parent;
-  if (!parent) return;
-  const parentId = parent.id;
+  const parentId = message.channel.parentId;
+  if (!parentId) return;
+  // Prefer cached parent; fetch on cache miss (e.g. after shard reconnect)
+  let parent = message.channel.parent;
+  if (!parent) {
+    try { parent = await client.channels.fetch(parentId); } catch { return; }
+  }
 
-  if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(parent.guildId)) return;
+  if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(message.guildId)) return;
   if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(parentId)) return;
   if (message.channel.ownerId !== client.user.id) return;
 
   // If the agent is waiting for a question answer, don't enqueue as follow-up
   if (isAwaitingQuestion(parentId)) return;
 
-  if (ADMIN_ROLE_IDS && !(ADMIN_USER_ID && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
+  const threadRoles = ALLOWED_ROLE_IDS || ADMIN_ROLE_IDS;
+  if (threadRoles && !(ADMIN_USER_ID && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, threadRoles)) return;
 
   const prompt = message.content.trim();
   if (!prompt) return;
 
   // Rate-limit thread follow-ups
-  if (isDmRateLimited(message.author.id)) {
+  if (isDmRateLimited(message.author.id, message.member)) {
     message.react("🌙").catch(() => {});
     return;
   }
@@ -1569,7 +1604,12 @@ client.on("warn", (msg) => {
   log.warn("Discord client warning", { message: msg });
 });
 
+/** Timestamp of the last disconnect — used to suppress notifications for brief reconnects. */
+let _lastDisconnectAt = 0;
+const RECONNECT_NOTIFY_THRESHOLD_MS = 30_000;
+
 client.on("shardDisconnect", (event, shardId) => {
+  _lastDisconnectAt = Date.now();
   log.warn("Shard disconnected", { shardId, code: event?.code });
 });
 
@@ -1578,17 +1618,26 @@ client.on("shardError", (err, shardId) => {
 });
 
 client.on("shardReconnecting", (shardId) => {
+  if (!_lastDisconnectAt) _lastDisconnectAt = Date.now();
   log.info("Shard reconnecting", { shardId });
 });
 
 client.on("shardResume", async (shardId) => {
-  log.info("Shard resumed", { shardId });
+  const downtime = _lastDisconnectAt ? Date.now() - _lastDisconnectAt : 0;
+  _lastDisconnectAt = 0;
+  log.info("Shard resumed", { shardId, downtimeMs: downtime });
 
-  // Reconnect notification — prefer admin DM, fallback to channel
+  // Only notify on longer disconnects — brief reconnects are normal gateway behaviour
+  if (downtime < RECONNECT_NOTIFY_THRESHOLD_MS) return;
+
+  const downtimeStr = downtime < 60_000
+    ? `${Math.round(downtime / 1000)}s`
+    : `${Math.round(downtime / 60_000)} min`;
+
   const reconnectEmbed = new EmbedBuilder()
     .setTitle("🥀 Reconnected")
     .setColor(0x71797e)
-    .setDescription(`**${client.user?.tag ?? "Bot"}** ist nach einem kurzen Disconnect zurück~`)
+    .setDescription(`**${client.user?.tag ?? "Bot"}** ist nach **${downtimeStr}** Disconnect zurück~`)
     .addFields({ name: "Projekt", value: PROJECT_NAME, inline: true })
     .setTimestamp();
 
