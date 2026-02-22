@@ -18,17 +18,6 @@ Send a DM or @mention in Discord — the agent edits files, runs tests, commits,
 
 > **📖 [Full documentation & interactive guide →](https://epantke.github.io/discord-autopilot/)**
 
-## Features
-
-|  |  |  |
-|--|--|--|
-| 🤖 **Autonomous Agent** | 📡 **Live Streaming** | 🔒 **Push Approval Gate** |
-| Edits, tests, commits — no hand-holding | Real-time output in Discord threads | `git push` requires human approval via buttons |
-| 💬 **Conversational** | 👥 **Multi-Channel** | ❓ **Ask-User** |
-| @mention or DM, reply in threads | Each channel gets its own isolated workspace | Agent asks clarifying questions and waits |
-| 🛡️ **Deny-by-Default** | 🔑 **Secret Scanner** | 💾 **Session Recovery** |
-| All access outside workspace blocked | Auto-redacts tokens & keys before Discord | Sessions & grants survive restarts (SQLite) |
-
 ## ⚠️ Disclaimer
 
 > **Experimental software — use at your own risk.** This grants an AI agent autonomous access to edit files, run commands, and commit in your repo. The authors assume no liability. Do not run on production systems without understanding the risks. Review all agent changes before merging. See [full notice](https://epantke.github.io/discord-autopilot/#security).
@@ -78,6 +67,18 @@ irm https://github.com/epantke/discord-autopilot/releases/latest/download/agent.
 | `/responders [add\|remove\|list]` | Manage who can answer agent questions |
 
 </details>
+
+## Features
+
+🤖 **Autonomous Agent** — Edits, tests, commits — no hand-holding required<br>
+📡 **Live Streaming** — Real-time output in per-task Discord threads<br>
+🔒 **Push Approval** — `git push` always requires human approval via buttons<br>
+💬 **Conversational** — @mention or DM the bot, reply in threads for follow-ups<br>
+👥 **Multi-Channel** — Each channel gets its own isolated git worktree<br>
+❓ **Ask-User** — Agent asks clarifying questions and waits for your answer<br>
+🛡️ **Deny-by-Default** — All access outside workspace blocked unless granted<br>
+🔑 **Secret Scanner** — Auto-redacts tokens & keys before posting to Discord<br>
+💾 **Session Recovery** — Sessions & grants survive restarts (SQLite)
 
 ## Security
 
