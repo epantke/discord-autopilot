@@ -61,9 +61,10 @@ const PAUSE_GRACE_MS = safeInt(
 );
 
 // Keepalive interval for Copilot SDK sessions to prevent silent expiry.
-// Set to 0 to disable. Default: 15 minutes.
+// Set to 0 to disable (default). The session-not-found retry handles expiry
+// transparently, so keepalive is only needed if you want zero-delay reconnects.
 const SESSION_KEEPALIVE_MS = safeInt(
-  env("SESSION_KEEPALIVE_MS"), 15 * 60_000, 0
+  env("SESSION_KEEPALIVE_MS"), 0, 0
 );
 
 // ── Snowflake ID validation ──────────────────────────────────────────────────

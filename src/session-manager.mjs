@@ -39,6 +39,20 @@ import { createLogger } from "./logger.mjs";
 const execFileAsync = promisify(execFile);
 const log = createLogger("session");
 
+/**
+ * Build git env vars for authenticating remote operations (fetch, pull, clone)
+ * via GITHUB_TOKEN when available.
+ */
+function _gitAuthEnv() {
+  if (!GITHUB_TOKEN) return {};
+  return {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${GITHUB_TOKEN}`).toString("base64")}`,
+  };
+}
+
 /** Callback for sending notifications to a Discord channel. Set by bot.mjs at startup. */
 let _notifyChannel = null;
 
@@ -169,12 +183,13 @@ async function _cloneRepoInner(cloneUrl, projectName) {
   mkdirSync(REPOS_ROOT, { recursive: true });
 
   if (existsSync(join(repoPath, ".git"))) {
-    // Already cloned — fetch latest
+    // Already cloned — fetch latest (pass auth for private repos)
+    const authEnv = _gitAuthEnv();
     try {
-      await execFileAsync("git", ["-C", repoPath, "fetch", "--all", "--prune"], { timeout: 30_000 });
+      await execFileAsync("git", ["-C", repoPath, "fetch", "--all", "--prune"], { timeout: 30_000, env: { ...process.env, ...authEnv } });
     } catch { /* best effort */ }
     try {
-      await execFileAsync("git", ["-C", repoPath, "pull", "--ff-only"], { timeout: 30_000 });
+      await execFileAsync("git", ["-C", repoPath, "pull", "--ff-only"], { timeout: 30_000, env: { ...process.env, ...authEnv } });
     } catch { /* diverged, use existing state */ }
     return repoPath;
   }
@@ -188,18 +203,9 @@ async function _cloneRepoInner(cloneUrl, projectName) {
     }
   }
 
-  // Inject credentials via git config header — avoids URL manipulation entirely
-  const cloneEnv = {};
-  if (GITHUB_TOKEN) {
-    cloneEnv.GIT_TERMINAL_PROMPT = "0";
-    cloneEnv.GIT_CONFIG_COUNT = "1";
-    cloneEnv.GIT_CONFIG_KEY_0 = "http.https://github.com/.extraheader";
-    cloneEnv.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${GITHUB_TOKEN}`).toString("base64")}`;
-  }
-
   await execFileAsync("git", ["clone", cloneUrl, repoPath], {
     timeout: 120_000,
-    env: { ...process.env, ...cloneEnv },
+    env: { ...process.env, ..._gitAuthEnv() },
   });
 
   log.info("Repo cloned", { projectName, repoPath });
@@ -288,7 +294,7 @@ export async function setChannelBranch(channelId, branch) {
   // Fetch and validate the branch exists on the remote
   try {
     await execFileAsync("git", ["fetch", "origin", branch], {
-      cwd: repoPath, timeout: 30_000,
+      cwd: repoPath, timeout: 30_000, env: { ...process.env, ..._gitAuthEnv() },
     });
   } catch {
     return { ok: false, error: `Branch \`${branch}\` konnte nicht gefetcht werden. Existiert er auf dem Remote?` };
@@ -392,7 +398,7 @@ async function createWorktree(channelId) {
     // Fetch latest and resolve the remote branch
     try {
       await execFileAsync("git", ["fetch", "origin", baseBranch], {
-        cwd: repoPath, timeout: 30_000,
+        cwd: repoPath, timeout: 30_000, env: { ...process.env, ..._gitAuthEnv() },
       });
     } catch { /* best effort — may already be up to date */ }
     try {
@@ -497,15 +503,11 @@ function _buildSessionHooks(channelId, channel) {
       const ctx = sessions.get(channelId);
       // Ignore onIdle triggered by keepalive pings
       if (ctx?._keepalivePing) return;
-      if (ctx) {
-        // Guard against stale onIdle from a previous task finishing the current task's output
-        const gen = ctx._taskGen;
-        ctx.output?.finish("🖤 **Fertig~**").catch(() => {});
-        if (ctx._taskGen === gen) {
-          ctx.status = "idle";
-          updateSessionStatus(channelId, "idle");
-        }
-      }
+      // NOTE: Do NOT set ctx.status or call output.finish() here.
+      // The session.idle event fires BEFORE sendAndWait() resolves, so
+      // touching status would race with processQueue — allowing a second
+      // task to start while the first sendAndWait is still in-flight.
+      // processQueue handles all status transitions and output flushing.
     },
 
     onUserQuestion: async (question, choices) => {
@@ -653,6 +655,8 @@ async function _createSession(channelId, channel) {
     _taskGen: 0,
     _changingModel: false,
     _pauseWarnedAt: null,
+    _sessionRetried: false,
+    _keepalivePing: false,
   };
 
   sessions.set(channelId, ctx);
@@ -731,7 +735,7 @@ export async function enqueueTask(channelId, channel, prompt, outputChannel, use
 
 async function processQueue(channelId, channel) {
   const ctx = sessions.get(channelId);
-  if (!ctx || ctx.status === "working" || ctx.paused || ctx._changingModel) return;
+  if (!ctx || ctx.status === "working" || ctx.paused || ctx._changingModel || ctx._keepalivePing) return;
   if (ctx.queue.length === 0) return;
 
   const { prompt, resolve, reject, outputChannel, userId } = ctx.queue.shift();
@@ -744,12 +748,14 @@ async function processQueue(channelId, channel) {
 
   // Typing indicator while agent is working
   let typingInterval;
+  let localTaskId = null;
 
   try {
     updateSessionStatus(channelId, "working");
     ctx.output = new DiscordOutput(outputChannel);
     ctx.taskId = insertTask(channelId, prompt, userId);
-    log.info("Task started", { channelId, taskId: ctx.taskId, prompt: prompt.slice(0, 100) });
+    localTaskId = ctx.taskId;
+    log.info("Task started", { channelId, taskId: localTaskId, prompt: prompt.slice(0, 100) });
 
     outputChannel.sendTyping().catch(() => {});
     typingInterval = setInterval(() => outputChannel.sendTyping().catch(() => {}), 8_000);
@@ -792,28 +798,37 @@ async function processQueue(channelId, channel) {
     } finally {
       ctx._sessionRetried = false;
     }
-    completeTask(ctx.taskId, "completed");
-    log.info("Task completed", { channelId, taskId: ctx.taskId });
-    ctx.status = "idle";
-    updateSessionStatus(channelId, "idle");
-    await ctx.output?.finish("🖤 **Fertig~**");
+    completeTask(localTaskId, "completed");
+    log.info("Task completed", { channelId, taskId: localTaskId });
+    // Guard: only transition to idle if this is still the active task.
+    // If another task started (race via re-entrant processQueue), _taskGen
+    // will have been incremented and we must not touch shared state.
+    if (ctx._taskGen === taskGen) {
+      ctx.status = "idle";
+      updateSessionStatus(channelId, "idle");
+      await ctx.output?.finish("🖤 **Fertig~**");
+    }
     resolve(response);
   } catch (err) {
     // If aborted via /stop, cleanup was already handled
     if (ctx._aborted) {
       ctx._aborted = false;
     } else if (err.message?.includes("Timeout") && err.message?.includes("session.idle")) {
-      log.warn("Task timed out", { channelId, taskId: ctx.taskId, timeoutMs: TASK_TIMEOUT_MS });
+      log.warn("Task timed out", { channelId, taskId: localTaskId, timeoutMs: TASK_TIMEOUT_MS });
       try { ctx.copilotSession.abort(); } catch {}
-      if (ctx.taskId) completeTask(ctx.taskId, "aborted");
-      await ctx.output?.finish(`🌑 **Timeout** nach ${Math.round(TASK_TIMEOUT_MS / 60_000)} min~`);
-      ctx.status = "idle";
-      updateSessionStatus(channelId, "idle");
+      if (localTaskId) completeTask(localTaskId, "aborted");
+      if (ctx._taskGen === taskGen) {
+        ctx.status = "idle";
+        updateSessionStatus(channelId, "idle");
+        await ctx.output?.finish(`🌑 **Timeout** nach ${Math.round(TASK_TIMEOUT_MS / 60_000)} min~`);
+      }
     } else {
-      if (ctx.taskId) completeTask(ctx.taskId, "failed");
-      ctx.status = "idle";
-      updateSessionStatus(channelId, "idle");
-      await ctx.output?.finish(`🩸 **Fehler:** ${redactSecrets(err.message).clean}`);
+      if (localTaskId) completeTask(localTaskId, "failed");
+      if (ctx._taskGen === taskGen) {
+        ctx.status = "idle";
+        updateSessionStatus(channelId, "idle");
+        await ctx.output?.finish(`🩸 **Fehler:** ${redactSecrets(err.message).clean}`);
+      }
     }
     err._reportedByOutput = true;
     reject(err);
@@ -979,6 +994,9 @@ export async function changeModel(channelId, channel, newModel) {
   if (ctx.status === "working") {
     return { ok: false, error: "Kann nicht wechseln während ein Task läuft. Erst `/stop`~" };
   }
+  if (ctx._changingModel) {
+    return { ok: false, error: "Modellwechsel läuft bereits — bitte warten~" };
+  }
 
   const oldModel = ctx.model;
   ctx.model = newModel;
@@ -1080,6 +1098,13 @@ function _startKeepalive(channelId, channel) {
       // Session died between keepalives — recreate proactively
       if (err.message?.includes("Session not found")) {
         log.warn("Keepalive detected expired session, recreating", { channelId });
+        // Guard: if the session was destroyed while this callback was in-flight,
+        // do NOT recreate — the context is detached and the new session would leak.
+        if (!sessions.has(channelId)) {
+          log.info("Keepalive aborted — session already destroyed", { channelId });
+          _clearKeepalive(channelId);
+          return;
+        }
         try { ctx.copilotSession.destroy(); } catch {}
         try {
           const botName = channel.client?.user?.username || "Nyx";
@@ -1108,7 +1133,13 @@ function _startKeepalive(channelId, channel) {
         log.warn("Keepalive ping failed", { channelId, error: err.message });
       }
     } finally {
-      if (ctx) ctx._keepalivePing = false;
+      if (ctx) {
+        ctx._keepalivePing = false;
+        // Kick the queue in case tasks arrived during keepalive
+        if (ctx.queue.length > 0 && ctx.status === "idle" && !ctx.paused) {
+          setImmediate(() => processQueue(channelId, channel));
+        }
+      }
     }
   }, SESSION_KEEPALIVE_MS);
   timer.unref();

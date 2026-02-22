@@ -1490,11 +1490,15 @@ client.on("messageCreate", async (message) => {
   // ── Thread follow-ups (guild channels)
   if (!message.channel.isThread()) return;
 
-  const parent = message.channel.parent;
-  if (!parent) return;
-  const parentId = parent.id;
+  const parentId = message.channel.parentId;
+  if (!parentId) return;
+  // Prefer cached parent; fetch on cache miss (e.g. after shard reconnect)
+  let parent = message.channel.parent;
+  if (!parent) {
+    try { parent = await client.channels.fetch(parentId); } catch { return; }
+  }
 
-  if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(parent.guildId)) return;
+  if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(message.guildId)) return;
   if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(parentId)) return;
   if (message.channel.ownerId !== client.user.id) return;
 

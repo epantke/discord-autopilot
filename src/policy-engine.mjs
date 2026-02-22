@@ -261,8 +261,8 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
           gate: "outside",
         };
       }
-      // Block tilde expansion — shell expands ~ to home dir, bypassing resolve()
-      if (rawTarget === "~" || rawTarget.startsWith("~/")) {
+      // Block tilde expansion — shell expands ~ / ~/ / ~user to home dirs, bypassing resolve()
+      if (rawTarget.startsWith("~")) {
         return {
           decision: "deny",
           reason: `Shell cd with tilde expansion is not allowed: ${rawTarget}`,
