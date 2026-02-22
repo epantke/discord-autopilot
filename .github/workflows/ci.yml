@@ -74,6 +74,7 @@ jobs:
         run: |
           expected_files=(
             bot.mjs
+            command-info.mjs
             config.mjs
             copilot-client.mjs
             discord-output.mjs
