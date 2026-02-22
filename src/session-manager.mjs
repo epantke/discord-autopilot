@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync, rmSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { WORKSPACES_ROOT, REPOS_ROOT, PROJECT_NAME, REPO_PATH, GITHUB_TOKEN, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, DEFAULT_MODEL, AUTO_APPROVE_PUSH, DEFAULT_BRANCH } from "./config.mjs";
 import {
   upsertSession,
   getSession,
+  getAllSessions,
   updateSessionStatus,
   updateSessionModel,
   deleteSession as dbDeleteSession,
@@ -31,12 +32,27 @@ import {
   revokeAllGrants,
 } from "./grants.mjs";
 import { DiscordOutput } from "./discord-output.mjs";
-import { createPushApprovalRequest } from "./push-approval.mjs";
+import { createPushApprovalRequest, cancelPushApproval } from "./push-approval.mjs";
 import { redactSecrets } from "./secret-scanner.mjs";
 import { createLogger } from "./logger.mjs";
 
 const execFileAsync = promisify(execFile);
 const log = createLogger("session");
+
+/**
+ * Remove a worktree directory and prune stale git registrations.
+ * Best-effort — errors are logged but never thrown.
+ */
+async function removeWorktree(worktreePath, repoPath) {
+  try { rmSync(worktreePath, { recursive: true, force: true }); } catch (err) {
+    log.warn("Failed to remove worktree directory", { worktreePath, error: err.message });
+  }
+  if (repoPath) {
+    try {
+      await execFileAsync("git", ["worktree", "prune"], { cwd: repoPath, timeout: 10_000 });
+    } catch { /* best effort */ }
+  }
+}
 
 /**
  * In-memory session context per channel.
@@ -149,6 +165,15 @@ async function _cloneRepoInner(cloneUrl, projectName) {
       await execFileAsync("git", ["-C", repoPath, "pull", "--ff-only"], { timeout: 30_000 });
     } catch { /* diverged, use existing state */ }
     return repoPath;
+  }
+
+  // If directory exists without .git, it's a partial/broken clone — remove it
+  if (existsSync(repoPath)) {
+    log.warn("Removing partial clone directory", { repoPath, projectName });
+    try { rmSync(repoPath, { recursive: true, force: true }); } catch (err) {
+      log.error("Failed to remove partial clone", { repoPath, error: err.message });
+      throw new Error(`Konnte kaputtes Clone-Verzeichnis nicht entfernen: ${repoPath}`);
+    }
   }
 
   // Inject GITHUB_TOKEN into URL for auth
@@ -311,16 +336,31 @@ async function createWorktree(channelId) {
   const worktreePath = join(wsRoot, channelId);
 
   if (existsSync(worktreePath)) {
-    let branch;
+    // Validate git integrity — if the worktree is corrupted, remove and recreate
+    let isValid = false;
     try {
-      const { stdout } = await execFileAsync("git", ["branch", "--show-current"], {
+      const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
         cwd: worktreePath, encoding: "utf-8", timeout: 5_000,
       });
-      branch = stdout.trim();
-    } catch {
-      branch = `agent/${channelId.slice(-8)}-recovered`;
+      isValid = stdout.trim() === "true";
+    } catch { /* invalid */ }
+
+    if (isValid) {
+      let branch;
+      try {
+        const { stdout } = await execFileAsync("git", ["branch", "--show-current"], {
+          cwd: worktreePath, encoding: "utf-8", timeout: 5_000,
+        });
+        branch = stdout.trim();
+      } catch {
+        branch = `agent/${channelId.slice(-8)}-recovered`;
+      }
+      return { workspacePath: worktreePath, branch };
     }
-    return { workspacePath: worktreePath, branch };
+
+    // Corrupted worktree — remove and recreate below
+    log.warn("Corrupted worktree detected, recreating", { worktreePath, channelId });
+    await removeWorktree(worktreePath, repoPath);
   }
 
   const branchName = `agent/${channelId.slice(-8)}-${Date.now().toString(36)}`;
@@ -391,7 +431,7 @@ function _buildSessionHooks(channelId, channel) {
     onPushRequest: async (command) => {
       if (AUTO_APPROVE_PUSH) return { approved: true };
       const ctx = sessions.get(channelId);
-      return createPushApprovalRequest(ctx?.output?.channel || channel, ctx?.workspacePath || "", command);
+      return createPushApprovalRequest(ctx?.output?.channel || channel, ctx?.workspacePath || "", command, channelId);
     },
 
     onOutsideRequest: (reason) => {
@@ -541,6 +581,11 @@ async function _createSession(channelId, channel) {
       break; // success
     } catch (err) {
       if (attempt >= 2) {
+        // Clean up the orphaned worktree before propagating
+        if (!dbRow) {
+          const repoPath = getEffectiveRepo(channelId).repoPath;
+          await removeWorktree(workspacePath, repoPath);
+        }
         // Provide a clearer message for Copilot auth errors
         if (err.message?.includes("Authorization") || err.message?.includes("login")) {
           throw new Error(
@@ -687,12 +732,12 @@ async function processQueue(channelId, channel) {
     } else if (err.message?.includes("Timeout") && err.message?.includes("session.idle")) {
       log.warn("Task timed out", { channelId, taskId: ctx.taskId, timeoutMs: TASK_TIMEOUT_MS });
       try { ctx.copilotSession.abort(); } catch {}
-      completeTask(ctx.taskId, "aborted");
+      if (ctx.taskId) completeTask(ctx.taskId, "aborted");
       await ctx.output?.finish(`🌑 **Timeout** nach ${Math.round(TASK_TIMEOUT_MS / 60_000)} min~`);
       ctx.status = "idle";
       updateSessionStatus(channelId, "idle");
     } else {
-      completeTask(ctx.taskId, "failed");
+      if (ctx.taskId) completeTask(ctx.taskId, "failed");
       ctx.status = "idle";
       updateSessionStatus(channelId, "idle");
       await ctx.output?.finish(`🩸 **Fehler:** ${redactSecrets(err.message).clean}`);
@@ -746,7 +791,9 @@ export function getSessionStatus(channelId) {
 
 export async function resetSession(channelId) {
   const ctx = sessions.get(channelId);
+  let worktreePath, repoPath;
   if (ctx) {
+    worktreePath = ctx.workspacePath;
     ctx._aborted = true;
     try { ctx.copilotSession.abort(); } catch {}
     try { ctx.copilotSession.destroy(); } catch {}
@@ -760,9 +807,16 @@ export async function resetSession(channelId) {
   }
   sessions.delete(channelId);
   responderStore.delete(channelId);
+  try { cancelPushApproval(channelId); } catch {}
   try { revokeAllGrants(channelId); } catch (err) { log.error("Failed to revoke grants on reset", { channelId, error: err.message }); }
   try { dbDeleteSession(channelId); } catch (err) { log.error("Failed to delete session from DB", { channelId, error: err.message }); }
   try { deleteRespondersByChannel(channelId); } catch (err) { log.error("Failed to delete responders on reset", { channelId, error: err.message }); }
+
+  // Clean up worktree from disk
+  if (worktreePath) {
+    try { repoPath = getEffectiveRepo(channelId).repoPath; } catch {}
+    await removeWorktree(worktreePath, repoPath);
+  }
 }
 
 // ── Hard Stop ───────────────────────────────────────────────────────────────
@@ -915,12 +969,19 @@ const _idleSweep = setInterval(() => {
     // Track last activity — fall back to creation time
     const idle = now - (ctx._lastActivity || 0);
     if (idle >= IDLE_SWEEP_MS) {
+      const worktreePath = ctx.workspacePath;
       try { ctx.copilotSession.destroy(); } catch {}
       revokeAllGrants(channelId);
       responderStore.delete(channelId);
       sessions.delete(channelId);
       try { dbDeleteSession(channelId); } catch {}
       try { deleteRespondersByChannel(channelId); } catch {}
+      // Clean up worktree from disk
+      if (worktreePath) {
+        let repoPath;
+        try { repoPath = getEffectiveRepo(channelId).repoPath; } catch {}
+        removeWorktree(worktreePath, repoPath).catch(() => {});
+      }
       log.info("Idle session swept", { channelId });
     }
   }
@@ -929,3 +990,70 @@ const _idleSweep = setInterval(() => {
   if (pruned > 0) log.info("Pruned old tasks", { count: pruned });
 }, IDLE_SWEEP_MS / 2);
 _idleSweep.unref();
+
+// ── Startup Reconciliation ──────────────────────────────────────────────────
+
+/**
+ * Reconcile filesystem worktrees with DB sessions on startup.
+ * Removes orphaned worktree directories and prunes stale git registrations.
+ * Should be called once after bot login.
+ */
+export async function reconcileWorkspaces() {
+  if (!existsSync(WORKSPACES_ROOT)) return;
+
+  const dbSessions = getAllSessions();
+  const activeWorkspaces = new Set(dbSessions.map((s) => s.workspace_path));
+  // Also keep workspaces for in-memory sessions (shouldn't differ, but be safe)
+  for (const ctx of sessions.values()) {
+    activeWorkspaces.add(ctx.workspacePath);
+  }
+
+  // Collect all base repo paths for pruning
+  const repoPathsToPrune = new Set();
+  repoPathsToPrune.add(REPO_PATH);
+  for (const override of repoOverrides.values()) {
+    repoPathsToPrune.add(override.repoPath);
+  }
+
+  let removed = 0;
+
+  try {
+    const projectDirs = readdirSync(WORKSPACES_ROOT, { withFileTypes: true });
+    for (const projectDir of projectDirs) {
+      if (!projectDir.isDirectory()) continue;
+      const projectPath = join(WORKSPACES_ROOT, projectDir.name);
+      let channelDirs;
+      try { channelDirs = readdirSync(projectPath, { withFileTypes: true }); } catch { continue; }
+      for (const channelDir of channelDirs) {
+        if (!channelDir.isDirectory()) continue;
+        const worktreePath = join(projectPath, channelDir.name);
+        if (!activeWorkspaces.has(worktreePath)) {
+          log.info("Removing orphaned worktree", { worktreePath });
+          try { rmSync(worktreePath, { recursive: true, force: true }); removed++; } catch (err) {
+            log.warn("Failed to remove orphaned worktree", { worktreePath, error: err.message });
+          }
+        }
+      }
+    }
+  } catch (err) {
+    log.warn("Failed to scan workspaces for reconciliation", { error: err.message });
+  }
+
+  // Validate DB sessions — remove entries whose workspace no longer exists
+  for (const row of dbSessions) {
+    if (!existsSync(row.workspace_path)) {
+      log.info("Removing stale DB session (workspace missing)", { channelId: row.channel_id, workspace: row.workspace_path });
+      try { dbDeleteSession(row.channel_id); } catch {}
+    }
+  }
+
+  // Prune worktree registrations in all known repos
+  for (const repoPath of repoPathsToPrune) {
+    if (!existsSync(join(repoPath, ".git"))) continue;
+    try {
+      await execFileAsync("git", ["worktree", "prune"], { cwd: repoPath, timeout: 10_000 });
+    } catch { /* best effort */ }
+  }
+
+  if (removed > 0) log.info("Startup reconciliation complete", { orphansRemoved: removed });
+}

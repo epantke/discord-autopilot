@@ -204,13 +204,24 @@ export async function createAgentSession(opts) {
   });
   // Destroy orphaned session if timeout fires first
   creationPromise.then((s) => { if (timedOut) { try { s.destroy(); } catch {} } }).catch(() => {});
-  const session = await Promise.race([
-    creationPromise,
-    new Promise((_, reject) => {
-      creationTimer = setTimeout(() => { timedOut = true; reject(new Error("Copilot session creation timed out after 60s")); }, 60_000);
-      creationTimer.unref();
-    }),
-  ]);
+  let session;
+  try {
+    session = await Promise.race([
+      creationPromise,
+      new Promise((_, reject) => {
+        creationTimer = setTimeout(() => { timedOut = true; reject(new Error("Copilot session creation timed out after 60s")); }, 60_000);
+        creationTimer.unref();
+      }),
+    ]);
+  } catch (err) {
+    clearTimeout(creationTimer);
+    // If connection failed, reset singleton so next call recreates it
+    if (err.message?.includes("connect") || err.message?.includes("ECONNREFUSED") || err.message?.includes("spawn")) {
+      log.warn("Copilot client connection error, resetting singleton", { error: err.message });
+      client = null;
+    }
+    throw err;
+  }
   clearTimeout(creationTimer);
 
   // Wire up streaming events

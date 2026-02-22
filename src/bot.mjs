@@ -28,6 +28,7 @@ import {
   DEFAULT_GRANT_TTL_MIN,
   BASE_ROOT,
   WORKSPACES_ROOT,
+  REPOS_ROOT,
   REPO_PATH,
   TASK_TIMEOUT_MS,
   RATE_LIMIT_WINDOW_MS,
@@ -61,9 +62,10 @@ import {
   getChannelBranch,
   clearChannelBranch,
   hasWorkingSessions,
+  reconcileWorkspaces,
 } from "./session-manager.mjs";
 
-import { addGrant, revokeGrant, startGrantCleanup, restoreGrants } from "./grants.mjs";
+import { addGrant, revokeGrant, startGrantCleanup, restoreGrants, cancelAllGrantTimers } from "./grants.mjs";
 import {
   closeDb,
   getAllSessions,
@@ -77,7 +79,7 @@ import { redactSecrets } from "./secret-scanner.mjs";
 import { checkForUpdate, downloadAndApplyUpdate, restartBot } from "./updater.mjs";
 import { createLogger } from "./logger.mjs";
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 
 const log = createLogger("bot");
 
@@ -399,6 +401,11 @@ client.once(Events.ClientReady, async () => {
   const envIssues = await validateEnvironment();
   const recoveryInfo = await recoverFromPreviousErrors();
 
+  // Reconcile orphaned worktrees left by previous crashes
+  try { await reconcileWorkspaces(); } catch (err) {
+    log.warn("Workspace reconciliation failed", { error: err.message });
+  }
+
   // ── Startup Notification ────────────────────────────────────────────────
   await sendStartupNotification({ envIssues, recoveryInfo });
 
@@ -473,6 +480,15 @@ function buildStartupEmbed({ envIssues, recoveryInfo } = {}) {
 async function validateEnvironment() {
   const errors = [];
   const warnings = [];
+
+  // Validate base directories are accessible/creatable
+  for (const [label, dir] of [["BASE_ROOT", BASE_ROOT], ["WORKSPACES_ROOT", WORKSPACES_ROOT], ["REPOS_ROOT", REPOS_ROOT]]) {
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch (err) {
+      errors.push(`${label} (${dir}) kann nicht erstellt werden: ${err.message}`);
+    }
+  }
 
   // Check STARTUP_CHANNEL_ID — does the channel still exist?
   if (STARTUP_CHANNEL_ID) {
@@ -1501,6 +1517,7 @@ async function shutdown(signal, exitCode = 0) {
 
   try { client.destroy(); } catch (err) { log.error("Client destroy failed", { error: err.message }); }
   try { await stopCopilotClient(); } catch (err) { log.error("Copilot stop failed", { error: err.message }); }
+  try { cancelAllGrantTimers(); } catch (err) { log.error("Grant timer cancel failed", { error: err.message }); }
   try { closeDb(); } catch (err) { log.error("DB close failed", { error: err.message }); }
   process.exit(exitCode);
 }

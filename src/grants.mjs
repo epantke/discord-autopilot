@@ -128,8 +128,20 @@ export function restoreGrants(channelId) {
 
 export function startGrantCleanup(intervalMs = 60_000) {
   const timer = setInterval(() => {
-    purgeExpiredGrants();
+    try { purgeExpiredGrants(); } catch { /* DB may be closed during shutdown */ }
   }, intervalMs);
   timer.unref();
   return timer;
+}
+
+/**
+ * Cancel all grant timers across all channels.
+ * Call before closeDb() during shutdown to prevent DB-closed errors.
+ */
+export function cancelAllGrantTimers() {
+  for (const [, grants] of grantStore) {
+    for (const [, g] of grants) {
+      if (g.timer) clearTimeout(g.timer);
+    }
+  }
 }

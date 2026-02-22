@@ -12,6 +12,18 @@ import { ADMIN_ROLE_IDS, ADMIN_USER_ID } from "./config.mjs";
 
 const execFileAsync = promisify(execFile);
 
+/** Active collectors per channel, so they can be cancelled on /reset. */
+const _activeCollectors = new Map();
+
+/** Cancel any active push-approval collector for a channel. */
+export function cancelPushApproval(channelId) {
+  const collector = _activeCollectors.get(channelId);
+  if (collector) {
+    collector.stop("reset");
+    _activeCollectors.delete(channelId);
+  }
+}
+
 async function getBranch(cwd) {
   try {
     const { stdout } = await execFileAsync("git", ["branch", "--show-current"], { cwd, encoding: "utf-8", timeout: 5_000 });
@@ -24,8 +36,9 @@ async function getBranch(cwd) {
 /**
  * Collects git info and posts a push-approval embed with buttons.
  * Returns a Promise that resolves to { approved: boolean }.
+ * @param {string} [channelId] - Channel ID for collector tracking
  */
-export async function createPushApprovalRequest(channel, workspacePath, command) {
+export async function createPushApprovalRequest(channel, workspacePath, command, channelId) {
   let diffSummary = "";
   let logSummary = "";
 
@@ -144,6 +157,7 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
     });
 
     collector.on("end", (collected) => {
+      if (channelId) _activeCollectors.delete(channelId);
       if (collected.size === 0) {
         msg.edit({ components: [] }).catch(() => {});
         resolve({ approved: false, user: "(timeout)" });

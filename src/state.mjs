@@ -28,9 +28,14 @@ try {
       try { unlinkSync(STATE_DB_PATH + suffix); } catch { /* may not exist */ }
     }
   }
-  db = new Database(STATE_DB_PATH);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
+  try {
+    db = new Database(STATE_DB_PATH);
+    db.pragma("journal_mode = WAL");
+    db.pragma("foreign_keys = ON");
+  } catch (retryErr) {
+    log.error("Database recovery also failed — cannot start", { error: retryErr.message });
+    throw retryErr;
+  }
 }
 
 // ── Schema ──────────────────────────────────────────────────────────────────
@@ -94,8 +99,15 @@ function setSchemaVersion(v) {
 }
 
 function runMigrations() {
-  let v = getSchemaVersion();
+  let v;
+  try {
+    v = getSchemaVersion();
+  } catch (err) {
+    log.error("Failed to read schema version, attempting fresh start", { error: err.message });
+    return;
+  }
 
+  try {
   if (v < 1) {
     db.transaction(() => {
       const cols = db.pragma("table_info(sessions)").map((c) => c.name);
@@ -179,6 +191,14 @@ function runMigrations() {
   }
 
   // Future migrations go here as `if (v < 7) { ... setSchemaVersion(7); }`
+  } catch (migrationErr) {
+    log.error("Migration failed — backing up DB and continuing with current schema", { error: migrationErr.message });
+    try {
+      const backupPath = STATE_DB_PATH + ".pre-migration." + Date.now();
+      copyFileSync(STATE_DB_PATH, backupPath);
+      log.info("Pre-migration DB backed up", { path: backupPath });
+    } catch { /* best effort */ }
+  }
 }
 
 runMigrations();
