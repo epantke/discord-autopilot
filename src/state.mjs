@@ -138,7 +138,21 @@ function runMigrations() {
     v = 4;
   }
 
-  // Future migrations go here as `if (v < 5) { ... setSchemaVersion(5); }`
+  if (v < 5) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS repo_overrides (
+        channel_id   TEXT PRIMARY KEY,
+        repo_url     TEXT NOT NULL,
+        repo_path    TEXT NOT NULL,
+        project_name TEXT NOT NULL,
+        set_at       TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    setSchemaVersion(5);
+    v = 5;
+  }
+
+  // Future migrations go here as `if (v < 6) { ... setSchemaVersion(6); }`
 }
 
 runMigrations();
@@ -293,6 +307,43 @@ export function insertTask(channelId, prompt, userId = null, timeoutMs = null) {
 
 export function completeTask(taskId, status) {
   stmtCompleteTask.run(status, taskId);
+}
+
+// ── Repo Overrides ──────────────────────────────────────────────────────────
+const stmtUpsertRepoOverride = db.prepare(`
+  INSERT INTO repo_overrides (channel_id, repo_url, repo_path, project_name)
+  VALUES (@channelId, @repoUrl, @repoPath, @projectName)
+  ON CONFLICT(channel_id) DO UPDATE SET
+    repo_url     = excluded.repo_url,
+    repo_path    = excluded.repo_path,
+    project_name = excluded.project_name,
+    set_at       = datetime('now')
+`);
+
+const stmtGetRepoOverride = db.prepare(
+  `SELECT * FROM repo_overrides WHERE channel_id = ?`
+);
+
+const stmtDeleteRepoOverride = db.prepare(
+  `DELETE FROM repo_overrides WHERE channel_id = ?`
+);
+
+const stmtAllRepoOverrides = db.prepare(`SELECT * FROM repo_overrides`);
+
+export function upsertRepoOverride(channelId, repoUrl, repoPath, projectName) {
+  stmtUpsertRepoOverride.run({ channelId, repoUrl, repoPath, projectName });
+}
+
+export function getRepoOverride(channelId) {
+  return stmtGetRepoOverride.get(channelId) || null;
+}
+
+export function deleteRepoOverride(channelId) {
+  stmtDeleteRepoOverride.run(channelId);
+}
+
+export function getAllRepoOverrides() {
+  return stmtAllRepoOverrides.all();
 }
 
 // ── Stale state recovery ────────────────────────────────────────────────────

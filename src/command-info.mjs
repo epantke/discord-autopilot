@@ -70,6 +70,7 @@ export function buildSelfAwarenessPrompt({ botName, workspacePath, branch, recen
     "- `/update` — Check for and apply bot updates",
     "- `/pause` / `/resume` — Pause or resume queue processing",
     "- `/responders` — Manage who can answer agent questions",
+    "- `/repo` — Switch repo for this channel (set/current/reset)",
     "",
     "## Important rules",
     "1. You CANNOT git push or publish PRs without explicit user approval — the system will block it.",

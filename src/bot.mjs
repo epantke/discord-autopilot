@@ -53,6 +53,9 @@ import {
   getChannelResponders,
   changeModel,
   listAvailableModels,
+  setChannelRepo,
+  getChannelRepo,
+  clearChannelRepo,
 } from "./session-manager.mjs";
 
 import { addGrant, revokeGrant, startGrantCleanup, restoreGrants } from "./grants.mjs";
@@ -189,6 +192,25 @@ const commands = [
     )
     .addStringOption((opt) =>
       opt.setName("name").setDescription("Modell-ID zum Wechseln").setAutocomplete(true)
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
+    .setName("repo")
+    .setDescription("Repo für diesen Channel wechseln")
+    .addStringOption((opt) =>
+      opt
+        .setName("action")
+        .setDescription("Aktion")
+        .setRequired(true)
+        .addChoices(
+          { name: "Repo setzen", value: "set" },
+          { name: "Aktuelles Repo", value: "current" },
+          { name: "Zurück zum Standard-Repo", value: "reset" }
+        )
+    )
+    .addStringOption((opt) =>
+      opt.setName("url").setDescription("GitHub-URL oder owner/repo")
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 ];
@@ -1200,6 +1222,59 @@ client.on("interactionCreate", async (interaction) => {
               embeds: [new EmbedBuilder().setTitle("🌑 Update-Timeout").setColor(0x71797e).setDescription("Keine Antwort erhalten. Update abgebrochen~").setTimestamp()],
               components: [],
             }).catch(() => {});
+          }
+          break;
+        }
+        break;
+      }
+
+      // ── /repo ────────────────────────────────────────────────────────────
+      case "repo": {
+        const action = interaction.options.getString("action");
+
+        if (action === "current") {
+          const info = getChannelRepo(channelId);
+          if (info.isOverride) {
+            await interaction.reply({
+              content: `🔮 **Aktuelles Repo:** \`${info.projectName}\`\n📎 ${info.repoUrl}`,
+              flags: MessageFlags.Ephemeral,
+            });
+          } else {
+            await interaction.reply({
+              content: `🔮 **Standard-Repo:** \`${info.projectName}\``,
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+          break;
+        }
+
+        if (action === "set") {
+          const url = interaction.options.getString("url");
+          if (!url) {
+            await interaction.reply({
+              content: "🥀 `url` Option angeben — z.B. `owner/repo` oder GitHub-URL~",
+              flags: MessageFlags.Ephemeral,
+            });
+            break;
+          }
+
+          await interaction.deferReply();
+          const result = await setChannelRepo(channelId, channel, url);
+          if (result.ok) {
+            await interaction.editReply(`💜 Repo gewechselt zu \`${result.owner}/${result.repo}\`~ Session wird neu erstellt.`);
+          } else {
+            await interaction.editReply(`🩸 ${result.error}`);
+          }
+          break;
+        }
+
+        if (action === "reset") {
+          await interaction.deferReply();
+          const had = await clearChannelRepo(channelId);
+          if (had) {
+            await interaction.editReply("💜 Repo-Override entfernt. Zurück zum Standard-Repo~");
+          } else {
+            await interaction.editReply("🥀 Kein Repo-Override aktiv — nutzt bereits das Standard-Repo.");
           }
           break;
         }

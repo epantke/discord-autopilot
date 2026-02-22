@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { WORKSPACES_ROOT, PROJECT_NAME, REPO_PATH, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, DEFAULT_MODEL } from "./config.mjs";
+import { WORKSPACES_ROOT, REPOS_ROOT, PROJECT_NAME, REPO_PATH, GITHUB_TOKEN, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, DEFAULT_MODEL } from "./config.mjs";
 import {
   upsertSession,
   getSession,
@@ -17,6 +17,10 @@ import {
   deleteRespondersByChannel,
   pruneOldTasks,
   getRecentTasks,
+  upsertRepoOverride,
+  getRepoOverride as dbGetRepoOverride,
+  deleteRepoOverride,
+  getAllRepoOverrides,
 } from "./state.mjs";
 import { createAgentSession, listAvailableModels } from "./copilot-client.mjs";
 import {
@@ -45,6 +49,131 @@ const sessions = new Map();
 const responderStore = new Map();
 
 /**
+ * In-memory repo override per channel.
+ * Map< channelId, { repoUrl: string, repoPath: string, projectName: string } >
+ */
+const repoOverrides = new Map();
+
+// Restore repo overrides from DB on startup
+for (const row of getAllRepoOverrides()) {
+  repoOverrides.set(row.channel_id, {
+    repoUrl: row.repo_url,
+    repoPath: row.repo_path,
+    projectName: row.project_name,
+  });
+}
+
+/**
+ * Get effective repo config for a channel (override or default).
+ */
+function getEffectiveRepo(channelId) {
+  const override = repoOverrides.get(channelId);
+  if (override) return { repoPath: override.repoPath, projectName: override.projectName };
+  return { repoPath: REPO_PATH, projectName: PROJECT_NAME };
+}
+
+/**
+ * Parse a GitHub repo identifier (URL or owner/repo) into { owner, repo, cloneUrl }.
+ * Returns null if invalid.
+ */
+function parseRepoInput(input) {
+  input = input.trim();
+  // Handle owner/repo format
+  const shortMatch = input.match(/^([\w.-]+)\/([\w.-]+)$/);
+  if (shortMatch) {
+    return { owner: shortMatch[1], repo: shortMatch[2], cloneUrl: `https://github.com/${shortMatch[1]}/${shortMatch[2]}.git` };
+  }
+  // Handle full GitHub URL
+  const urlMatch = input.match(/^https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?$/);
+  if (urlMatch) {
+    return { owner: urlMatch[1], repo: urlMatch[2], cloneUrl: `https://github.com/${urlMatch[1]}/${urlMatch[2]}.git` };
+  }
+  return null;
+}
+
+/**
+ * Clone a repo into REPOS_ROOT if not already present.
+ * Uses GITHUB_TOKEN for auth if available.
+ */
+async function cloneRepo(cloneUrl, projectName) {
+  const repoPath = join(REPOS_ROOT, projectName);
+  mkdirSync(REPOS_ROOT, { recursive: true });
+
+  if (existsSync(join(repoPath, ".git"))) {
+    // Already cloned — fetch latest
+    try {
+      await execFileAsync("git", ["-C", repoPath, "fetch", "--all", "--prune"], { timeout: 30_000 });
+    } catch { /* best effort */ }
+    try {
+      await execFileAsync("git", ["-C", repoPath, "pull", "--ff-only"], { timeout: 30_000 });
+    } catch { /* diverged, use existing state */ }
+    return repoPath;
+  }
+
+  // Inject GITHUB_TOKEN into URL for auth
+  let authUrl = cloneUrl;
+  if (GITHUB_TOKEN) {
+    authUrl = cloneUrl.replace("https://github.com/", `https://x-access-token:${GITHUB_TOKEN}@github.com/`);
+  }
+
+  await execFileAsync("git", ["clone", authUrl, repoPath], { timeout: 120_000 });
+  log.info("Repo cloned", { projectName, repoPath });
+  return repoPath;
+}
+
+/**
+ * Set a repo override for a channel. Clones the repo if needed.
+ * Resets any existing session for the channel.
+ * @returns {{ ok: boolean, projectName?: string, error?: string }}
+ */
+export async function setChannelRepo(channelId, channel, input) {
+  const parsed = parseRepoInput(input);
+  if (!parsed) return { ok: false, error: "Ungültiges Format. Nutze `owner/repo` oder eine GitHub-URL~" };
+
+  const projectName = `${parsed.owner}-${parsed.repo}`;
+
+  let repoPath;
+  try {
+    repoPath = await cloneRepo(parsed.cloneUrl, projectName);
+  } catch (err) {
+    log.error("Failed to clone repo", { input, error: err.message });
+    return { ok: false, error: `Clone fehlgeschlagen: ${err.message}` };
+  }
+
+  // Reset existing session if any
+  await resetSession(channelId);
+
+  // Store override
+  repoOverrides.set(channelId, { repoUrl: parsed.cloneUrl, repoPath, projectName });
+  upsertRepoOverride(channelId, parsed.cloneUrl, repoPath, projectName);
+  log.info("Repo override set", { channelId, projectName, repoPath });
+
+  return { ok: true, projectName, owner: parsed.owner, repo: parsed.repo };
+}
+
+/**
+ * Get current repo info for a channel.
+ */
+export function getChannelRepo(channelId) {
+  const override = repoOverrides.get(channelId);
+  if (override) {
+    return { isOverride: true, repoUrl: override.repoUrl, projectName: override.projectName, repoPath: override.repoPath };
+  }
+  return { isOverride: false, projectName: PROJECT_NAME, repoPath: REPO_PATH };
+}
+
+/**
+ * Clear repo override for a channel, reverting to default.
+ */
+export async function clearChannelRepo(channelId) {
+  const had = repoOverrides.has(channelId);
+  repoOverrides.delete(channelId);
+  deleteRepoOverride(channelId);
+  await resetSession(channelId);
+  return had;
+}
+
+/**
  * @typedef {object} SessionContext
  * @property {import("@github/copilot-sdk").CopilotSession} copilotSession
  * @property {string} workspacePath
@@ -62,13 +191,13 @@ const responderStore = new Map();
 // ── Workspace Setup ─────────────────────────────────────────────────────────
 
 async function createWorktree(channelId) {
-  const wsRoot = join(WORKSPACES_ROOT, PROJECT_NAME);
+  const { repoPath, projectName } = getEffectiveRepo(channelId);
+  const wsRoot = join(WORKSPACES_ROOT, projectName);
   mkdirSync(wsRoot, { recursive: true });
 
   const worktreePath = join(wsRoot, channelId);
 
   if (existsSync(worktreePath)) {
-    // Reuse existing worktree — read its actual branch
     let branch;
     try {
       const { stdout } = await execFileAsync("git", ["branch", "--show-current"], {
@@ -84,9 +213,8 @@ async function createWorktree(channelId) {
   const branchName = `agent/${channelId.slice(-8)}-${Date.now().toString(36)}`;
 
   try {
-    // Create branch from HEAD
     await execFileAsync("git", ["branch", branchName, "HEAD"], {
-      cwd: REPO_PATH,
+      cwd: repoPath,
       timeout: 10_000,
     });
   } catch {
@@ -95,11 +223,10 @@ async function createWorktree(channelId) {
 
   try {
     await execFileAsync("git", ["worktree", "add", worktreePath, branchName], {
-      cwd: REPO_PATH,
+      cwd: repoPath,
       timeout: 30_000,
     });
   } catch (err) {
-    // If worktree add fails, try with existing directory
     if (!existsSync(worktreePath)) {
       throw err;
     }
@@ -292,7 +419,8 @@ async function _createSession(channelId, channel) {
   sessions.set(channelId, ctx);
 
   // Persist to DB
-  upsertSession(channelId, PROJECT_NAME, workspacePath, branch, "idle", model);
+  const { projectName: effectiveProject } = getEffectiveRepo(channelId);
+  upsertSession(channelId, effectiveProject, workspacePath, branch, "idle", model);
   log.info("Session created", { channelId, branch, model, workspace: workspacePath });
 
   // Restore grants from DB
