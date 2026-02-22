@@ -18,7 +18,6 @@ import {
   pruneOldTasks,
   getRecentTasks,
   upsertRepoOverride,
-  getRepoOverride as dbGetRepoOverride,
   deleteRepoOverride,
   getAllRepoOverrides,
 } from "./state.mjs";

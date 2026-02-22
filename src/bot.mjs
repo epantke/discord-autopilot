@@ -71,11 +71,8 @@ import { stopCopilotClient } from "./copilot-client.mjs";
 import { redactSecrets } from "./secret-scanner.mjs";
 import { checkForUpdate, downloadAndApplyUpdate, restartBot } from "./updater.mjs";
 import { createLogger } from "./logger.mjs";
-import { execSync, execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
-
-const execFileAsync = promisify(execFile);
 
 const log = createLogger("bot");
 
