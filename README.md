@@ -18,21 +18,16 @@ Send a DM or @mention in Discord — the agent edits files, runs tests, commits,
 
 > **📖 [Full documentation & interactive guide →](https://epantke.github.io/discord-autopilot/)**
 
-## Highlights
+## Features
 
-- 🤖 **Autonomous agent** — edits, tests, commits without hand-holding
-- 💬 **Conversational** — @mention or DM the bot, reply in threads for follow-ups
-- 📡 **Live streaming** — output streams into per-task Discord threads
-- 🔒 **Push approval gate** — `git push` & PR actions require human approval via buttons
-- 🔓 **Deny-by-default grants** — outside-workspace access is blocked and the user is prompted to use `/grant`
-- 🧵 **Thread follow-ups** — reply in a thread to continue the conversation
-- 👥 **Multi-channel** — each channel or DM gets its own isolated workspace and session
-- ❓ **Ask-user** — agent can ask clarifying questions via Discord and wait for your answer
-- 🛡️ **Deny-by-default** — all access outside workspace blocked unless explicitly granted
-- 🔑 **Secret scanner** — auto-redacts tokens & keys before posting to Discord
-- 💾 **Session recovery** — sessions, grants & history survive bot restarts (SQLite)
-- 🏗️ **Workspace isolation** — every DM / channel gets its own git worktree
-- 🧠 **Self-aware** — the bot knows its capabilities and can explain them when asked
+|  |  |  |
+|--|--|--|
+| 🤖 **Autonomous Agent** | 📡 **Live Streaming** | 🔒 **Push Approval Gate** |
+| Edits, tests, commits — no hand-holding | Real-time output in Discord threads | `git push` requires human approval via buttons |
+| 💬 **Conversational** | 👥 **Multi-Channel** | ❓ **Ask-User** |
+| @mention or DM, reply in threads | Each channel gets its own isolated workspace | Agent asks clarifying questions and waits |
+| 🛡️ **Deny-by-Default** | 🔑 **Secret Scanner** | 💾 **Session Recovery** |
+| All access outside workspace blocked | Auto-redacts tokens & keys before Discord | Sessions & grants survive restarts (SQLite) |
 
 ## ⚠️ Security Notice & Disclaimer
 
