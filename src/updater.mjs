@@ -4,8 +4,8 @@ import { CURRENT_VERSION, AGENT_SCRIPT_PATH, GITHUB_TOKEN } from "./config.mjs";
 
 const log = createLogger("updater");
 
-const REPO_OWNER = process.env.UPDATE_REPO_OWNER || "epantke";
-const REPO_NAME = process.env.UPDATE_REPO_NAME || "remote-coding-agent";
+const REPO_OWNER = (process.env.UPDATE_REPO_OWNER || "epantke").trim();
+const REPO_NAME = (process.env.UPDATE_REPO_NAME || "remote-coding-agent").trim();
 
 let _cachedResult = null;
 let _cachedAt = 0;
@@ -14,16 +14,20 @@ const CACHE_TTL_MS = 5 * 60_000;
 // ── Version comparison ──────────────────────────────────────────────────────
 
 function parseVer(v) {
-  return (v || "").replace(/^v/, "").split("-")[0].split(".").map(Number);
+  const clean = (v || "").replace(/^v/, "");
+  const [core, pre] = clean.split("-", 2);
+  return { parts: core.split(".").map(Number), pre: pre || null };
 }
 
 function isNewer(latest, current) {
   const a = parseVer(latest);
   const b = parseVer(current);
   for (let i = 0; i < 3; i++) {
-    if ((a[i] || 0) > (b[i] || 0)) return true;
-    if ((a[i] || 0) < (b[i] || 0)) return false;
+    if ((a.parts[i] || 0) > (b.parts[i] || 0)) return true;
+    if ((a.parts[i] || 0) < (b.parts[i] || 0)) return false;
   }
+  // Same numeric version: release (no pre) is newer than pre-release
+  if (!a.pre && b.pre) return true;
   return false;
 }
 

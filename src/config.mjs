@@ -6,8 +6,14 @@ import { createLogger } from "./logger.mjs";
 
 const log = createLogger("config");
 
+/** Read an environment variable with automatic whitespace/CRLF trimming. */
+function env(name) {
+  const v = process.env[name];
+  return v != null ? v.trim() : undefined;
+}
+
 // ── Required ────────────────────────────────────────────────────────────────
-const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const DISCORD_TOKEN = env("DISCORD_TOKEN");
 if (!DISCORD_TOKEN) {
   log.error("DISCORD_TOKEN is not set. Export it and restart.");
   process.exit(1);
@@ -15,47 +21,51 @@ if (!DISCORD_TOKEN) {
 
 // ── Paths ───────────────────────────────────────────────────────────────────
 const BASE_ROOT =
-  process.env.BASE_ROOT || join(homedir(), ".local", "share", "discord-agent");
+  env("BASE_ROOT") || join(homedir(), ".local", "share", "discord-agent");
 const WORKSPACES_ROOT =
-  process.env.WORKSPACES_ROOT || join(BASE_ROOT, "workspaces");
+  env("WORKSPACES_ROOT") || join(BASE_ROOT, "workspaces");
 const REPOS_ROOT = join(BASE_ROOT, "repos");
 const STATE_DB_PATH = join(BASE_ROOT, "state.sqlite");
 
 // ── Project (set at runtime by agent.sh via env) ────────────────────────────
-const PROJECT_NAME = process.env.PROJECT_NAME || "default";
-const REPO_PATH = process.env.REPO_PATH || join(REPOS_ROOT, PROJECT_NAME);
+const PROJECT_NAME = env("PROJECT_NAME") || "default";
+const REPO_PATH = env("REPO_PATH") || join(REPOS_ROOT, PROJECT_NAME);
 
 // ── Optional filters ────────────────────────────────────────────────────────
-const ALLOWED_GUILDS = csvToValidatedSet(process.env.ALLOWED_GUILDS, "ALLOWED_GUILDS");
-const ALLOWED_CHANNELS = csvToValidatedSet(process.env.ALLOWED_CHANNELS, "ALLOWED_CHANNELS");
-const ADMIN_ROLE_IDS = csvToValidatedSet(process.env.ADMIN_ROLE_IDS, "ADMIN_ROLE_IDS");
+const ALLOWED_GUILDS = csvToValidatedSet(env("ALLOWED_GUILDS"), "ALLOWED_GUILDS");
+const ALLOWED_CHANNELS = csvToValidatedSet(env("ALLOWED_CHANNELS"), "ALLOWED_CHANNELS");
+const ADMIN_ROLE_IDS = csvToValidatedSet(env("ADMIN_ROLE_IDS"), "ADMIN_ROLE_IDS");
 
 // ── Tunables ────────────────────────────────────────────────────────────────
-function safeInt(envVal, fallback) {
+function safeInt(envVal, fallback, min = 0) {
   const n = parseInt(envVal, 10);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
+  return Number.isFinite(n) && n >= min ? n : fallback;
 }
 
 const DISCORD_EDIT_THROTTLE_MS = safeInt(
-  process.env.DISCORD_EDIT_THROTTLE_MS, 1500
+  env("DISCORD_EDIT_THROTTLE_MS"), 1500
 );
 const DEFAULT_GRANT_MODE = "ro";
 const DEFAULT_GRANT_TTL_MIN = 30;
 const TASK_TIMEOUT_MS = safeInt(
-  process.env.TASK_TIMEOUT_MS, 30 * 60_000
+  env("TASK_TIMEOUT_MS"), 30 * 60_000, 1000
 );
 const RATE_LIMIT_WINDOW_MS = safeInt(
-  process.env.RATE_LIMIT_WINDOW_MS, 60_000
+  env("RATE_LIMIT_WINDOW_MS"), 60_000
 );
 const RATE_LIMIT_MAX = safeInt(
-  process.env.RATE_LIMIT_MAX, 10
+  env("RATE_LIMIT_MAX"), 10, 1
+);
+const PAUSE_GRACE_MS = safeInt(
+  env("PAUSE_GRACE_MS"), 60 * 60_000, 60_000
 );
 
 // ── Snowflake ID validation ──────────────────────────────────────────────────
 function validateSnowflake(val, name) {
   if (!val) return null;
-  if (/^\d{17,20}$/.test(val)) return val;
-  log.warn(`Invalid Snowflake ID for ${name}, ignoring`, { value: val });
+  const trimmed = val.trim();
+  if (/^\d{17,20}$/.test(trimmed)) return trimmed;
+  log.warn(`Invalid Snowflake ID for ${name}, ignoring`, { value: trimmed });
   return null;
 }
 
@@ -71,35 +81,35 @@ function csvToValidatedSet(envVal, name) {
 }
 
 // ── GitHub Token (cached before copilot-client.mjs may delete it from env) ──
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN || null;
+const GITHUB_TOKEN = env("GITHUB_TOKEN") || null;
 
 // ── Startup Notifications ───────────────────────────────────────────────────
-const STARTUP_CHANNEL_ID = validateSnowflake(process.env.STARTUP_CHANNEL_ID, "STARTUP_CHANNEL_ID");
-const ADMIN_USER_ID = validateSnowflake(process.env.ADMIN_USER_ID, "ADMIN_USER_ID");
+const STARTUP_CHANNEL_ID = validateSnowflake(env("STARTUP_CHANNEL_ID"), "STARTUP_CHANNEL_ID");
+const ADMIN_USER_ID = validateSnowflake(env("ADMIN_USER_ID"), "ADMIN_USER_ID");
 
 // ── DM Access Control ───────────────────────────────────────────────────────
 // CSV of user Snowflake IDs allowed to interact via DMs (in addition to ADMIN_USER_ID).
 // null = only ADMIN_USER_ID may use DMs (backwards-compatible).
-const ALLOWED_DM_USERS = csvToValidatedSet(process.env.ALLOWED_DM_USERS, "ALLOWED_DM_USERS");
+const ALLOWED_DM_USERS = csvToValidatedSet(env("ALLOWED_DM_USERS"), "ALLOWED_DM_USERS");
 
 // ── Model ───────────────────────────────────────────────────────────────────
-const DEFAULT_MODEL = process.env.DEFAULT_MODEL || "claude-opus-4.6";
+const DEFAULT_MODEL = env("DEFAULT_MODEL") || "claude-opus-4.6";
 
 // ── Default Branch ──────────────────────────────────────────────────────────
 // Optional: base branch for new worktrees. null = use the remote default (HEAD).
-const DEFAULT_BRANCH = process.env.DEFAULT_BRANCH || null;
+const DEFAULT_BRANCH = env("DEFAULT_BRANCH") || null;
 
 // ── Limits ──────────────────────────────────────────────────────────────────
-const MAX_QUEUE_SIZE = safeInt(process.env.MAX_QUEUE_SIZE, 50);
-const MAX_PROMPT_LENGTH = safeInt(process.env.MAX_PROMPT_LENGTH, 4000);
+const MAX_QUEUE_SIZE = safeInt(env("MAX_QUEUE_SIZE"), 50);
+const MAX_PROMPT_LENGTH = safeInt(env("MAX_PROMPT_LENGTH"), 4000);
 
 // ── Crash Recovery ───────────────────────────────────────────────────────
 // When true, tasks aborted by a crash/restart are automatically re-enqueued.
-const AUTO_RETRY_ON_CRASH = (process.env.AUTO_RETRY_ON_CRASH || "false").toLowerCase() === "true";
+const AUTO_RETRY_ON_CRASH = (env("AUTO_RETRY_ON_CRASH") || "false").toLowerCase() === "true";
 
 // ── Auto-Approve Push ───────────────────────────────────────────────────
 // When true, git push commands are auto-approved without Discord button confirmation.
-const AUTO_APPROVE_PUSH = (process.env.AUTO_APPROVE_PUSH || "false").toLowerCase() === "true";
+const AUTO_APPROVE_PUSH = (env("AUTO_APPROVE_PUSH") || "false").toLowerCase() === "true";
 
 // ── Version ─────────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -112,9 +122,9 @@ const CURRENT_VERSION = (() => {
 
 // ── Update Configuration ────────────────────────────────────────────────────
 const UPDATE_CHECK_INTERVAL_MS = safeInt(
-  process.env.UPDATE_CHECK_INTERVAL_MS, 3_600_000
+  env("UPDATE_CHECK_INTERVAL_MS"), 3_600_000
 );
-const AGENT_SCRIPT_PATH = process.env.AGENT_SCRIPT_PATH || null;
+const AGENT_SCRIPT_PATH = env("AGENT_SCRIPT_PATH") || null;
 
 export {
   DISCORD_TOKEN,
@@ -146,4 +156,5 @@ export {
   AUTO_RETRY_ON_CRASH,
   AUTO_APPROVE_PUSH,
   DEFAULT_BRANCH,
+  PAUSE_GRACE_MS,
 };

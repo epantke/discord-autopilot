@@ -23,7 +23,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$SCRIPT_DIR/.env" ]]; then
   set -a
   # shellcheck source=/dev/null
-  source "$SCRIPT_DIR/.env"
+  # Strip \r from CRLF line endings (Windows-edited .env files)
+  source <(sed 's/\r$//' "$SCRIPT_DIR/.env")
   set +a
 fi
 

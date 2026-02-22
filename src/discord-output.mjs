@@ -112,6 +112,13 @@ export class DiscordOutput {
             this._cleanedContent += scanned.slice(this._totalCleanAppended, safeLen);
             this._totalCleanAppended = safeLen;
           }
+
+          // Trim raw buffer to prevent O(n²) re-scanning on large output
+          if (!this.finished && this._rawAccum.length > REDACT_OVERLAP * 4) {
+            this._rawAccum = this._rawAccum.slice(-(REDACT_OVERLAP * 2));
+            const trimmedScan = redactSecrets(this._rawAccum).clean;
+            this._totalCleanAppended = Math.max(0, trimmedScan.length - REDACT_OVERLAP);
+          }
         }
       }
 

@@ -137,6 +137,8 @@ export async function createPushApprovalRequest(channel, workspacePath, command,
       time: 600_000, // 10 min timeout
     });
 
+    if (channelId) _activeCollectors.set(channelId, collector);
+
     collector.on("collect", async (interaction) => {
       const approved = interaction.customId === "push_approve";
       const label = approved ? "💜 Push approved" : "🩸 Push rejected";

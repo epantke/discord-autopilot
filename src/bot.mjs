@@ -63,6 +63,7 @@ import {
   clearChannelBranch,
   hasWorkingSessions,
   reconcileWorkspaces,
+  setNotifyCallback,
 } from "./session-manager.mjs";
 
 import { addGrant, revokeGrant, startGrantCleanup, restoreGrants, cancelAllGrantTimers } from "./grants.mjs";
@@ -389,6 +390,14 @@ client.once(Events.ClientReady, async () => {
     log.error("Failed to register slash commands — bot continues but commands may not appear", { error: err.message });
   }
   startGrantCleanup();
+
+  // Register channel notification callback for session-manager (idle sweep warnings)
+  setNotifyCallback(async (channelId, message) => {
+    try {
+      const ch = await client.channels.fetch(channelId);
+      if (ch?.isTextBased()) await ch.send(message);
+    } catch { /* best effort */ }
+  });
 
   // Restore grants from DB for any persisted sessions
   for (const row of getAllSessions()) {
@@ -829,7 +838,7 @@ function startUpdateChecker() {
       if (result.available && _lastNotifiedVersion !== result.latestVersion) {
         _lastNotifiedVersion = result.latestVersion;
         log.info("Auto-update triggered", { current: result.currentVersion, latest: result.latestVersion });
-        performAutoUpdate(result);
+        performAutoUpdate(result).catch((err) => log.error("Auto-update error", { error: err.message }));
       }
     } catch (err) {
       log.warn("Update check failed", { error: err.message });
@@ -888,6 +897,16 @@ client.on("interactionCreate", async (interaction) => {
 
   const { commandName, channelId } = interaction;
   const channel = interaction.channel;
+
+  // Admin-only commands require isAdmin() — setDefaultMemberPermissions is not enforced in DMs
+  const ADMIN_COMMANDS = new Set(["grant", "revoke", "stop", "reset", "model", "config", "pause", "resume", "responders", "update", "repo", "branch"]);
+  if (ADMIN_COMMANDS.has(commandName) && !isAdmin(interaction)) {
+    await interaction.reply({
+      content: "⛓️ Nur Admins dürfen diesen Command nutzen.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
 
   try {
     switch (commandName) {
