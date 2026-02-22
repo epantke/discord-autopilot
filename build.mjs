@@ -81,8 +81,8 @@ function buildBash() {
   const template = readNormalized(join(__dirname, "agent.sh"));
   const lines = template.split("\n");
 
-  const step5Idx = findLine(lines, (l) => /5\)\s*Copy application files/.test(l), "sh: step 5");
-  const step6Idx = findLine(lines, (l) => /6\)\s*Install dependencies/.test(l), "sh: step 6");
+  const step5Idx = findLine(lines, (l) => /6\)\s*Copy application files/.test(l), "sh: step 6");
+  const step6Idx = findLine(lines, (l) => /7\)\s*Install dependencies/.test(l), "sh: step 7");
 
   const step5Start = findSeparatorBefore(lines, step5Idx);
   const step6Start = findSeparatorBefore(lines, step6Idx);
@@ -90,15 +90,18 @@ function buildBash() {
   const sep = "# " + "─".repeat(78);
   const section = [
     sep,
-    "# 5) Write embedded application files",
+    "# 6) Write embedded application files",
     sep,
-    'info "Writing embedded application files…"',
-    "",
+    '',
+    'write_step 6 8 "Source files"',
+    '',
     'mkdir -p "$APP/src" "$APP/llm"',
     "",
   ];
 
+  let shCounter = 0;
   for (const src of sources) {
+    shCounter++;
     const dest = src.subdir ? `"$APP/${src.subdir}/${src.name}"` : `"$APP/${src.name}"`;
     const tag = `__EOF_${src.name.replace(/[.\-]/g, "_").toUpperCase()}__`;
 
@@ -113,6 +116,7 @@ function buildBash() {
     if (contentLines.at(-1) === "") contentLines.pop();
     for (const line of contentLines) section.push(line);
     section.push(tag);
+    section.push(`write_file_progress '${src.name}' ${shCounter} ${total}`);
     section.push("");
   }
 
