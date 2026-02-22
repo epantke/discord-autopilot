@@ -155,8 +155,9 @@ export async function setChannelRepo(channelId, channel, input) {
   try {
     repoPath = await cloneRepo(parsed.cloneUrl, projectName);
   } catch (err) {
-    log.error("Failed to clone repo", { input, error: err.message });
-    return { ok: false, error: `Clone fehlgeschlagen: ${err.message}` };
+    const safeError = redactSecrets(err.message).clean;
+    log.error("Failed to clone repo", { input, error: safeError });
+    return { ok: false, error: `Clone fehlgeschlagen: ${safeError}` };
   }
 
   // Reset existing session if any
@@ -254,6 +255,101 @@ async function createWorktree(channelId) {
   return { workspacePath: worktreePath, branch: branchName };
 }
 
+// ── Shared Hook Builder ─────────────────────────────────────────────────────
+
+/**
+ * Build the common set of Copilot session hooks for a channel.
+ * Shared between _createSession and changeModel to avoid duplication.
+ */
+function _buildSessionHooks(channelId, channel) {
+  return {
+    onPushRequest: async (command) => {
+      if (AUTO_APPROVE_PUSH) return { approved: true };
+      const ctx = sessions.get(channelId);
+      return createPushApprovalRequest(ctx?.output?.channel || channel, ctx?.workspacePath || "", command);
+    },
+
+    onOutsideRequest: (reason) => {
+      const ctx = sessions.get(channelId);
+      const target = ctx?.output?.channel || channel;
+      target
+        .send(
+          `⛓️ **Zugriff verweigert**\n${redactSecrets(reason).clean}\n\n` +
+            `Nutze \`/grant path:<pfad> mode:ro ttl:30\` für Zugriff~`
+        )
+        .catch(() => {});
+    },
+
+    onDelta: (text) => {
+      const ctx = sessions.get(channelId);
+      ctx?.output?.append(text);
+    },
+
+    onToolStart: (toolName) => {
+      const ctx = sessions.get(channelId);
+      if (!ctx) return;
+      const count = ctx._toolsCompleted || 0;
+      const suffix = count > 0 ? `  · ${count} fertig` : "";
+      ctx.output?.status(`⚔️ \`${toolName}\`…${suffix}`);
+    },
+
+    onToolComplete: (toolName, success, error) => {
+      const ctx = sessions.get(channelId);
+      if (!ctx) return;
+      ctx._toolsCompleted = (ctx._toolsCompleted || 0) + 1;
+      if (!success && error) {
+        ctx.output?.append(`\n🩸 \`${toolName}\`: ${error}\n`);
+      }
+      const count = ctx._toolsCompleted;
+      const icon = success ? "✦" : "🩸";
+      ctx.output?.status(`${icon} \`${toolName}\`  · ${count} Tool${count !== 1 ? "s" : ""} fertig`);
+    },
+
+    onIdle: () => {
+      const ctx = sessions.get(channelId);
+      if (ctx) {
+        ctx.output?.finish("🖤 **Fertig~**");
+        ctx.status = "idle";
+        updateSessionStatus(channelId, "idle");
+      }
+    },
+
+    onUserQuestion: async (question, choices) => {
+      const ctx = sessions.get(channelId);
+      if (ctx) ctx.awaitingQuestion = true;
+
+      const target = ctx?.output?.channel || channel;
+      await target.send(
+        `👁️ **Nyx fragt~**\n${redactSecrets(question).clean}` +
+          (choices ? `\nOptionen: ${choices.join(", ")}` : "")
+      );
+
+      try {
+        const collected = await target.awaitMessages({
+          max: 1,
+          time: 300_000, // 5 min
+          filter: (m) => {
+            if (m.author.bot) return false;
+            if (ADMIN_USER_ID && m.author.id === ADMIN_USER_ID) return true;
+            if (ADMIN_ROLE_IDS && m.member?.roles?.cache) {
+              if ([...ADMIN_ROLE_IDS].some((id) => m.member.roles.cache.has(id))) return true;
+            }
+            const responders = getChannelResponders(channelId);
+            if (responders.size > 0) return responders.has(m.author.id);
+            if (!ADMIN_ROLE_IDS) return true;
+            return false;
+          },
+        });
+        return collected.first()?.content || "Keine Antwort erhalten.";
+      } catch {
+        return "Timeout — keine Antwort erhalten.";
+      } finally {
+        if (ctx) ctx.awaitingQuestion = false;
+      }
+    },
+  };
+}
+
 // ── Session CRUD ────────────────────────────────────────────────────────────
 
 /**
@@ -315,91 +411,7 @@ async function _createSession(channelId, channel) {
     workspacePath,
     model,
     botInfo: { botName, branch, recentTasks },
-
-    onPushRequest: async (command) => {
-      if (AUTO_APPROVE_PUSH) return { approved: true };
-      return createPushApprovalRequest(channel, workspacePath, command);
-    },
-
-    onOutsideRequest: (reason) => {
-      const ctx = sessions.get(channelId);
-      const target = ctx?.output?.channel || channel;
-      target
-        .send(
-          `⛓️ **Zugriff verweigert**\n${redactSecrets(reason).clean}\n\n` +
-            `Nutze \`/grant path:<pfad> mode:ro ttl:30\` für Zugriff~`
-        )
-        .catch(() => {});
-    },
-
-    onDelta: (text) => {
-      const ctx = sessions.get(channelId);
-      ctx?.output?.append(text);
-    },
-
-    onToolStart: (toolName) => {
-      const ctx = sessions.get(channelId);
-      if (!ctx) return;
-      const count = ctx._toolsCompleted || 0;
-      const suffix = count > 0 ? `  · ${count} fertig` : "";
-      ctx.output?.status(`⚔️ \`${toolName}\`…${suffix}`);
-    },
-
-    onToolComplete: (toolName, success, error) => {
-      const ctx = sessions.get(channelId);
-      if (!ctx) return;
-      ctx._toolsCompleted = (ctx._toolsCompleted || 0) + 1;
-      if (!success && error) {
-        ctx.output?.append(`\n🩸 \`${toolName}\`: ${error}\n`);
-      }
-      const count = ctx._toolsCompleted;
-      const icon = success ? "✦" : "🩸";
-      ctx.output?.status(`${icon} \`${toolName}\`  · ${count} Tool${count !== 1 ? "s" : ""} fertig`);
-    },
-
-    onIdle: () => {
-      const ctx = sessions.get(channelId);
-      if (ctx) {
-        ctx.output?.finish("🖤 **Fertig~**");
-        ctx.status = "idle";
-        updateSessionStatus(channelId, "idle");
-      }
-    },
-
-    onUserQuestion: async (question, choices) => {
-      const ctx = sessions.get(channelId);
-      if (ctx) ctx.awaitingQuestion = true;
-
-      // Post question in the output channel (thread) where the user sees output
-      const target = ctx?.output?.channel || channel;
-      await target.send(
-        `👁️ **Nyx fragt~**\n${redactSecrets(question).clean}` +
-          (choices ? `\nOptionen: ${choices.join(", ")}` : "")
-      );
-
-      try {
-        const collected = await target.awaitMessages({
-          max: 1,
-          time: 300_000, // 5 min
-          filter: (m) => {
-            if (m.author.bot) return false;
-            if (ADMIN_USER_ID && m.author.id === ADMIN_USER_ID) return true;
-            if (ADMIN_ROLE_IDS && m.member?.roles?.cache) {
-              if ([...ADMIN_ROLE_IDS].some((id) => m.member.roles.cache.has(id))) return true;
-            }
-            const responders = getChannelResponders(channelId);
-            if (responders.size > 0) return responders.has(m.author.id);
-            if (!ADMIN_ROLE_IDS) return true;
-            return false;
-          },
-        });
-        return collected.first()?.content || "Keine Antwort erhalten.";
-      } catch {
-        return "Timeout — keine Antwort erhalten.";
-      } finally {
-        if (ctx) ctx.awaitingQuestion = false;
-      }
-    },
+    ..._buildSessionHooks(channelId, channel),
   });
       break; // success
     } catch (err) {
@@ -435,6 +447,7 @@ async function _createSession(channelId, channel) {
     _toolsCompleted: 0,
     _lastActivity: Date.now(),
     _taskGen: 0,
+    _changingModel: false,
   };
 
   sessions.set(channelId, ctx);
@@ -510,7 +523,7 @@ export async function enqueueTask(channelId, channel, prompt, outputChannel, use
 
 async function processQueue(channelId, channel) {
   const ctx = sessions.get(channelId);
-  if (!ctx || ctx.status === "working" || ctx.paused) return;
+  if (!ctx || ctx.status === "working" || ctx.paused || ctx._changingModel) return;
   if (ctx.queue.length === 0) return;
 
   const { prompt, resolve, reject, outputChannel, userId } = ctx.queue.shift();
@@ -629,7 +642,7 @@ export async function resetSession(channelId) {
 /**
  * Immediately abort the running task and optionally clear the queue.
  */
-export function hardStop(channelId, clearQueue = true) {
+export async function hardStop(channelId, clearQueue = true) {
   const ctx = sessions.get(channelId);
   if (!ctx) return { found: false };
 
@@ -643,9 +656,7 @@ export function hardStop(channelId, clearQueue = true) {
       completeTask(ctx.taskId, "aborted");
       ctx.taskId = null;
     }
-    ctx.output?.finish("💀 **Abgebrochen.**");
-    // Don't null output synchronously — finish() is async and needs the reference
-    // It will be nulled by processQueue's finally block
+    await ctx.output?.finish("💀 **Abgebrochen.**");
     ctx.status = "idle";
     updateSessionStatus(channelId, "idle");
   }
@@ -702,8 +713,8 @@ export async function changeModel(channelId, channel, newModel) {
 
   const oldModel = ctx.model;
   ctx.model = newModel;
+  ctx._changingModel = true;
 
-  // Destroy old Copilot session
   // Create the new session FIRST — only destroy the old one on success
   // to avoid bricking ctx.copilotSession if the new one fails
   let newSession;
@@ -714,97 +725,17 @@ export async function changeModel(channelId, channel, newModel) {
       workspacePath: ctx.workspacePath,
       model: newModel,
       botInfo: { botName, branch: ctx.branch },
-
-      onPushRequest: async (command) => {
-        if (AUTO_APPROVE_PUSH) return { approved: true };
-        return createPushApprovalRequest(channel, ctx.workspacePath, command);
-      },
-
-      onOutsideRequest: (reason) => {
-        const c = sessions.get(channelId);
-        const target = c?.output?.channel || channel;
-        target
-          .send(
-            `⛓️ **Zugriff verweigert**\n${redactSecrets(reason).clean}\n\n` +
-              `Nutze \`/grant path:<pfad> mode:ro ttl:30\` für Zugriff~`
-          )
-          .catch(() => {});
-      },
-
-      onDelta: (text) => {
-        const c = sessions.get(channelId);
-        c?.output?.append(text);
-      },
-
-      onToolStart: (toolName) => {
-        const c = sessions.get(channelId);
-        if (!c) return;
-        const count = c._toolsCompleted || 0;
-        const suffix = count > 0 ? `  · ${count} fertig` : "";
-        c.output?.status(`⚔️ \`${toolName}\`…${suffix}`);
-      },
-
-      onToolComplete: (toolName, success, error) => {
-        const c = sessions.get(channelId);
-        if (!c) return;
-        c._toolsCompleted = (c._toolsCompleted || 0) + 1;
-        if (!success && error) {
-          c.output?.append(`\n🩸 \`${toolName}\`: ${error}\n`);
-        }
-        const count = c._toolsCompleted;
-        const icon = success ? "✦" : "🩸";
-        c.output?.status(`${icon} \`${toolName}\`  · ${count} Tool${count !== 1 ? "s" : ""} fertig`);
-      },
-
-      onIdle: () => {
-        const c = sessions.get(channelId);
-        if (c) {
-          c.output?.finish("🖤 **Fertig~**");
-          c.status = "idle";
-          updateSessionStatus(channelId, "idle");
-        }
-      },
-
-      onUserQuestion: async (question, choices) => {
-        const c = sessions.get(channelId);
-        if (c) c.awaitingQuestion = true;
-
-        const target = c?.output?.channel || channel;
-        await target.send(
-          `👁️ **Nyx fragt~**\n${redactSecrets(question).clean}` +
-            (choices ? `\nOptionen: ${choices.join(", ")}` : "")
-        );
-
-        try {
-          const collected = await target.awaitMessages({
-            max: 1,
-            time: 300_000,
-            filter: (m) => {
-              if (m.author.bot) return false;
-              if (ADMIN_USER_ID && m.author.id === ADMIN_USER_ID) return true;
-              if (ADMIN_ROLE_IDS && m.member?.roles?.cache) {
-                if ([...ADMIN_ROLE_IDS].some((id) => m.member.roles.cache.has(id))) return true;
-              }
-              const responders = getChannelResponders(channelId);
-              if (responders.size > 0) return responders.has(m.author.id);
-              if (!ADMIN_ROLE_IDS) return true;
-              return false;
-            },
-          });
-          return collected.first()?.content || "Keine Antwort erhalten.";
-        } catch {
-          return "Timeout — keine Antwort erhalten.";
-        } finally {
-          if (c) c.awaitingQuestion = false;
-        }
-      },
+      ..._buildSessionHooks(channelId, channel),
     });
   } catch (err) {
     // Rollback model on failure — old session is still alive
     ctx.model = oldModel;
+    ctx._changingModel = false;
     log.error("Failed to recreate session with new model", { channelId, model: newModel, error: err.message });
     return { ok: false, error: `Session mit \`${newModel}\` fehlgeschlagen: ${err.message}` };
   }
+
+  ctx._changingModel = false;
 
   // Success — destroy old session and swap in the new one
   try { ctx.copilotSession.destroy(); } catch {}

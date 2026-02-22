@@ -12,15 +12,19 @@ const MESSAGE_SPLIT_THRESHOLD = 1800;
  * Accumulates full content per message and splits into multiple messages
  * when content exceeds Discord's limit, giving a readable streaming feel.
  */
+// Max overlap to retain between flush cycles to catch tokens split across chunk boundaries
+const REDACT_OVERLAP = 120;
+
 export class DiscordOutput {
   /** @param {import("discord.js").TextBasedChannel} channel */
   constructor(channel) {
     this.channel = channel;
-    this.content = "";
     /** Content already scanned and cleaned by redactSecrets */
     this._cleanedContent = "";
     /** Raw content not yet scanned */
     this._pendingContent = "";
+    /** Tail of the previous raw chunk, re-scanned to catch tokens split across flushes */
+    this._overlapBuffer = "";
     this.dirty = false;
     this.message = null;
     this.lastEdit = 0;
@@ -36,7 +40,6 @@ export class DiscordOutput {
    */
   append(text) {
     if (this.finished || !text) return;
-    this.content += text;
     this._pendingContent += text;
     this.dirty = true;
     this._scheduleEdit();
@@ -66,7 +69,6 @@ export class DiscordOutput {
     }
     if (epilogue) {
       this._pendingContent += `\n${epilogue}`;
-      this.content += `\n${epilogue}`;
       this.dirty = true;
     }
     try {
@@ -91,9 +93,17 @@ export class DiscordOutput {
     try {
       const footer = this._statusFooter ? `\n${this._statusFooter}` : "";
 
-      // Incrementally scan only newly appended content
+      // Incrementally scan newly appended content with overlap to catch tokens split across flushes
       if (this._pendingContent) {
-        this._cleanedContent += redactSecrets(this._pendingContent).clean;
+        const scanInput = this._overlapBuffer + this._pendingContent;
+        const scanned = redactSecrets(scanInput).clean;
+        // Remove the already-emitted overlap prefix from the scanned result
+        const overlapLen = this._overlapBuffer.length;
+        this._cleanedContent += scanned.slice(overlapLen);
+        // Keep tail of the raw input as overlap for the next cycle
+        this._overlapBuffer = this._pendingContent.length > REDACT_OVERLAP
+          ? this._pendingContent.slice(-REDACT_OVERLAP)
+          : this._pendingContent;
         this._pendingContent = "";
       }
 
@@ -102,7 +112,6 @@ export class DiscordOutput {
         const splitAt = this._findSplitPoint(this._cleanedContent, MESSAGE_SPLIT_THRESHOLD);
         const head = this._cleanedContent.slice(0, splitAt);
         this._cleanedContent = this._cleanedContent.slice(splitAt);
-        this.content = this._cleanedContent;
 
         if (!head) break;
         if (this.message) {
@@ -126,7 +135,6 @@ export class DiscordOutput {
         // Too large even for finish — send as attachment
         await this._sendAsAttachment(displayText);
         this.message = null;
-        this.content = "";
         this._cleanedContent = "";
         this._statusFooter = "";
       }
@@ -142,7 +150,6 @@ export class DiscordOutput {
             this.message = await this.channel.send(fallback);
           } else if (fallback) {
             await this._sendAsAttachment(fallback);
-            this.content = "";
             this._cleanedContent = "";
             this._statusFooter = "";
           }

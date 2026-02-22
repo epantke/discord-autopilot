@@ -771,6 +771,7 @@ async function performAutoUpdate(updateInfo) {
         `❌ Auto-update failed: ${result.reason}\n\nThe bot continues on **v${updateInfo.currentVersion}**.`,
         { color: 0xe74c3c, title: "❌ Update Failed" }
       );
+      _lastNotifiedVersion = null;
       _autoUpdateInProgress = false;
     }
   } catch (err) {
@@ -889,7 +890,7 @@ client.on("interactionCreate", async (interaction) => {
       // ── /stop ─────────────────────────────────────────────────────────
       case "stop": {
         const clearQ = interaction.options.getBoolean("clear_queue") ?? true;
-        const result = hardStop(channelId, clearQ);
+        const result = await hardStop(channelId, clearQ);
         if (!result.found) {
           await interaction.reply({
             content: "Keine aktive Session zum Stoppen~",

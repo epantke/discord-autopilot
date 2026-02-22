@@ -84,7 +84,7 @@ export function buildSelfAwarenessPrompt({ botName, workspacePath, branch, recen
   const parts = [IDENTITY_PROMPT, SOUL_PROMPT, capabilities];
 
   if (recentTasks && recentTasks.length > 0) {
-    const history = recentTasks
+    const history = [...recentTasks]
       .reverse()
       .map((t) => `- [${t.status}] ${t.prompt.slice(0, 200)}`)
       .join("\n");
