@@ -63,7 +63,7 @@ export async function createPushApprovalRequest(channel, workspacePath, command)
   const cleanCmd = redactSecrets(command.slice(0, 200)).clean;
 
   const embed = new EmbedBuilder()
-    .setTitle("�️ Push Approval")
+    .setTitle("🗡️ Push Approval")
     .setColor(0x71797e)
     .setDescription(
       `Nyx will ausführen:\n\`\`\`\n${cleanCmd}\n\`\`\``

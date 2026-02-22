@@ -829,8 +829,8 @@ client.on("interactionCreate", async (interaction) => {
       // ── /grant ────────────────────────────────────────────────────────
       case "grant": {
         const grantPath = interaction.options.getString("path");
-        const mode = interaction.options.getString("mode") || "ro";
-        const ttl = interaction.options.getInteger("ttl") || 30;
+        const mode = interaction.options.getString("mode") || DEFAULT_GRANT_MODE;
+        const ttl = interaction.options.getInteger("ttl") || DEFAULT_GRANT_TTL_MIN;
 
         // Basic sanity: must be absolute
         if (!grantPath.startsWith("/") && !grantPath.match(/^[A-Z]:\\/i)) {
@@ -860,7 +860,7 @@ client.on("interactionCreate", async (interaction) => {
       case "reset": {
         await interaction.deferReply();
         await resetSession(channelId);
-        await interaction.editReply("� Session zurückgesetzt. @mention oder DM für neuen Task~");
+        await interaction.editReply("🔮 Session zurückgesetzt. @mention oder DM für neuen Task~");
         break;
       }
 
@@ -1065,7 +1065,7 @@ client.on("interactionCreate", async (interaction) => {
           if (result.ok) {
             await interaction.editReply(`💜 Modell gewechselt zu \`${modelName}\`~`);
           } else {
-            await interaction.editReply(`🩸 ${result.error}`);
+            await interaction.editReply(`🩸 ${redactSecrets(result.error).clean}`);
           }
           break;
         }
@@ -1084,7 +1084,7 @@ client.on("interactionCreate", async (interaction) => {
             const embed = new EmbedBuilder()
               .setTitle("🩸 Update-Check fehlgeschlagen")
               .setColor(0x8b0000)
-              .setDescription(`Konnte nicht auf Updates prüfen: ${result.error}`)
+              .setDescription(`Konnte nicht auf Updates prüfen: ${redactSecrets(result.error).clean}`)
               .setTimestamp();
             await interaction.editReply({ embeds: [embed] });
             break;
@@ -1104,11 +1104,11 @@ client.on("interactionCreate", async (interaction) => {
               const notes = result.releaseNotes.length > 800
                 ? result.releaseNotes.slice(0, 797) + "…"
                 : result.releaseNotes;
-              embed.addFields({ name: "�️ What's New", value: notes, inline: false });
+              embed.addFields({ name: "🗡️ What's New", value: notes, inline: false });
             }
 
             embed.addFields({
-              name: "� Update",
+              name: "🔮 Update",
               value: "Nutze `/update action:apply` zum Updaten~",
               inline: false,
             });
@@ -1147,7 +1147,7 @@ client.on("interactionCreate", async (interaction) => {
           }
 
           const confirmEmbed = new EmbedBuilder()
-            .setTitle("� Update bestätigen")
+            .setTitle("🔮 Update bestätigen")
             .setColor(0x71797e)
             .setDescription(
               `Update von **v${check.currentVersion}** auf **v${check.latestVersion}**?\n\n` +
@@ -1263,7 +1263,7 @@ client.on("interactionCreate", async (interaction) => {
           if (result.ok) {
             await interaction.editReply(`💜 Repo gewechselt zu \`${result.owner}/${result.repo}\`~ Session wird neu erstellt.`);
           } else {
-            await interaction.editReply(`🩸 ${result.error}`);
+            await interaction.editReply(`🩸 ${redactSecrets(result.error).clean}`);
           }
           break;
         }
@@ -1304,7 +1304,7 @@ client.on("messageCreate", async (message) => {
   // Detect plain-text messages that look like slash commands (e.g. "/model", "/config")
   const slashMatch = message.content.trim().match(/^\/([\w-]+)/);
   if (slashMatch && KNOWN_COMMANDS.has(slashMatch[1])) {
-    message.reply(`� **\`/${slashMatch[1]}\`** ist ein Slash-Command — tippe es in die Nachrichtenleiste und wähle es aus dem Popup~`).catch(() => {});
+    message.reply(`🔮 **\`/${slashMatch[1]}\`** ist ein Slash-Command — tippe es in die Nachrichtenleiste und wähle es aus dem Popup~`).catch(() => {});
     return;
   }
 

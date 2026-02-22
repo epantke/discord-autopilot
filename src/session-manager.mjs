@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { WORKSPACES_ROOT, REPOS_ROOT, PROJECT_NAME, REPO_PATH, GITHUB_TOKEN, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, DEFAULT_MODEL } from "./config.mjs";
+import { WORKSPACES_ROOT, REPOS_ROOT, PROJECT_NAME, REPO_PATH, GITHUB_TOKEN, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, DEFAULT_MODEL, AUTO_APPROVE_PUSH } from "./config.mjs";
 import {
   upsertSession,
   getSession,
@@ -298,6 +298,7 @@ async function _createSession(channelId, channel) {
     botInfo: { botName, branch, recentTasks },
 
     onPushRequest: async (command) => {
+      if (AUTO_APPROVE_PUSH) return { approved: true };
       return createPushApprovalRequest(channel, workspacePath, command);
     },
 
@@ -492,14 +493,14 @@ async function processQueue(channelId, channel) {
   if (!ctx || ctx.status === "working" || ctx.paused) return;
   if (ctx.queue.length === 0) return;
 
-  const { prompt, resolve, reject, outputChannel } = ctx.queue.shift();
+  const { prompt, resolve, reject, outputChannel, userId } = ctx.queue.shift();
 
   ctx.status = "working";
   ctx.currentPrompt = prompt;
   ctx._toolsCompleted = 0;
   updateSessionStatus(channelId, "working");
   ctx.output = new DiscordOutput(outputChannel);
-  ctx.taskId = insertTask(channelId, prompt);
+  ctx.taskId = insertTask(channelId, prompt, userId);
   log.info("Task started", { channelId, taskId: ctx.taskId, prompt: prompt.slice(0, 100) });
 
   // Typing indicator while agent is working
@@ -617,7 +618,7 @@ export function hardStop(channelId, clearQueue = true) {
       completeTask(ctx.taskId, "aborted");
       ctx.taskId = null;
     }
-    ctx.output?.finish("� **Abgebrochen.**");
+    ctx.output?.finish("💀 **Abgebrochen.**");
     // Don't null output synchronously — finish() is async and needs the reference
     // It will be nulled by processQueue's finally block
     ctx.status = "idle";
@@ -690,6 +691,7 @@ export async function changeModel(channelId, channel, newModel) {
       botInfo: { botName, branch: ctx.branch },
 
       onPushRequest: async (command) => {
+        if (AUTO_APPROVE_PUSH) return { approved: true };
         return createPushApprovalRequest(channel, ctx.workspacePath, command);
       },
 
