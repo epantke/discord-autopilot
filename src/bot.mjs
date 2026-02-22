@@ -252,7 +252,11 @@ function isAllowed(interaction) {
   }
 
   if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(interaction.guildId)) return false;
-  if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(interaction.channelId)) return false;
+  if (ALLOWED_CHANNELS) {
+    // For threads, check the parent channel ID (sessions are keyed by parent channel)
+    const checkId = interaction.channel?.isThread?.() ? interaction.channel.parentId : interaction.channelId;
+    if (!ALLOWED_CHANNELS.has(checkId)) return false;
+  }
   // ADMIN_USER_ID always has access, even without admin roles
   if (ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID) return true;
   if (ADMIN_ROLE_IDS) {
@@ -902,8 +906,11 @@ client.on("interactionCreate", async (interaction) => {
     return;
   }
 
-  const { commandName, channelId } = interaction;
-  const channel = interaction.channel;
+  const { commandName } = interaction;
+  // For threads, use parent channel ID as session key (sessions are keyed by parent channel)
+  const isInThread = interaction.channel?.isThread?.();
+  const channelId = isInThread ? (interaction.channel.parentId || interaction.channelId) : interaction.channelId;
+  const channel = isInThread ? (interaction.channel.parent ?? interaction.channel) : interaction.channel;
 
   // Admin-only commands require isAdmin() — setDefaultMemberPermissions is not enforced in DMs
   const ADMIN_COMMANDS = new Set(["grant", "revoke", "stop", "reset", "model", "config", "pause", "resume", "responders", "update", "repo", "branch"]);
@@ -932,9 +939,10 @@ client.on("interactionCreate", async (interaction) => {
           break;
         }
 
-        const result = addGrant(channelId, grantPath, mode, ttl);
+        addGrant(channelId, grantPath, mode, ttl);
+        const expiryEpoch = Math.floor(Date.now() / 1000) + ttl * 60;
         await interaction.reply(
-          `💜 **Granted** \`${mode}\` auf \`${grantPath}\` für **${ttl} min** (endet <t:${Math.floor(new Date(result.expiresAt).getTime() / 1000)}:R>)~`
+          `💜 **Granted** \`${mode}\` auf \`${grantPath}\` für **${ttl} min** (endet <t:${expiryEpoch}:R>)~`
         );
         break;
       }
@@ -1412,14 +1420,14 @@ client.on("messageCreate", async (message) => {
 
     const dmChannelId = message.channel.id;
 
-    // If the agent is waitin (DMs have no member/roles)
-    if (isDmRateLimited(userId, nullhannelId)) return;
+    // If the agent is waiting for a question answer, don't enqueue as new task
+    if (isAwaitingQuestion(dmChannelId)) return;
 
     const prompt = message.content.trim();
     if (!prompt) return;
 
-    // Rate-limit DM messages
-    if (isDmRateLimited(userId)) {
+    // Rate-limit DM messages (DMs have no member/roles)
+    if (isDmRateLimited(userId, null)) {
       message.react("🌙").catch(() => {});
       return;
     }
@@ -1443,13 +1451,13 @@ client.on("messageCreate", async (message) => {
     if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(message.channel.id)) return;
     if (ADMIN_ROLE_IDS && !(ADMIN_USER_ID && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
 
-    // Strip the bot mention from the pro, message.membermpt
+    // Strip the bot mention from the prompt
     const prompt = message.content
       .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
       .trim();
     if (!prompt) return;
 
-    if (isDmRateLimited(message.author.id)) {
+    if (isDmRateLimited(message.author.id, message.member)) {
       message.react("🌙").catch(() => {});
       return;
     }
@@ -1493,13 +1501,13 @@ client.on("messageCreate", async (message) => {
   // If the agent is waiting for a question answer, don't enqueue as follow-up
   if (isAwaitingQuestion(parentId)) return;
 
-  if (ADMIN_ROLE_IDS && !(ADMIN_USER_ID, message.member && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
+  if (ADMIN_ROLE_IDS && !(ADMIN_USER_ID && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
 
   const prompt = message.content.trim();
   if (!prompt) return;
 
   // Rate-limit thread follow-ups
-  if (isDmRateLimited(message.author.id)) {
+  if (isDmRateLimited(message.author.id, message.member)) {
     message.react("🌙").catch(() => {});
     return;
   }

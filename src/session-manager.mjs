@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, existsSync, rmSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { WORKSPACES_ROOT, REPOS_ROOT, PROJECT_NAME, REPO_PATH, GITHUB_TOKEN, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, ALLOWED_DM_USERS, DEFAULT_MODEL, AUTO_APPROVE_PUSH, DEFAULT_BRANCH, PAUSE_GRACE_MS } from "./config.mjs";
+import { WORKSPACES_ROOT, REPOS_ROOT, PROJECT_NAME, REPO_PATH, GITHUB_TOKEN, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, ALLOWED_DM_USERS, DEFAULT_MODEL, AUTO_APPROVE_PUSH, DEFAULT_BRANCH, PAUSE_GRACE_MS, SESSION_KEEPALIVE_MS } from "./config.mjs";
 import {
   upsertSession,
   getSession,
@@ -259,7 +259,7 @@ export function getChannelRepo(channelId) {
  * Clear repo override for a channel, reverting to default.
  */
 export async function clearChannelRepo(channelId) {
-  const had = repoOverrides.has(channelId);
+  if (!repoOverrides.has(channelId)) return false;
   repoOverrides.delete(channelId);
   deleteRepoOverride(channelId);
 
@@ -271,7 +271,7 @@ export async function clearChannelRepo(channelId) {
   }
 
   await resetSession(channelId);
-  return had;
+  return true;
 }
 
 // ── Branch Overrides ───────────────────────────────────────────────────────────
@@ -324,11 +324,11 @@ export function getChannelBranch(channelId) {
  * Clear branch override for a channel, reverting to DEFAULT_BRANCH or remote default.
  */
 export async function clearChannelBranch(channelId) {
-  const had = branchOverrides.has(channelId);
+  if (!branchOverrides.has(channelId)) return false;
   branchOverrides.delete(channelId);
   dbDeleteBranchOverride(channelId);
   await resetSession(channelId);
-  return had;
+  return true;
 }
 
 /**
@@ -467,12 +467,13 @@ function _buildSessionHooks(channelId, channel) {
 
     onDelta: (text) => {
       const ctx = sessions.get(channelId);
+      if (ctx?._keepalivePing) return;
       ctx?.output?.append(text);
     },
 
     onToolStart: (toolName) => {
       const ctx = sessions.get(channelId);
-      if (!ctx) return;
+      if (!ctx || ctx._keepalivePing) return;
       const count = ctx._toolsCompleted || 0;
       const suffix = count > 0 ? `  · ${count} fertig` : "";
       ctx.output?.status(`⚔️ \`${toolName}\`…${suffix}`);
@@ -480,7 +481,7 @@ function _buildSessionHooks(channelId, channel) {
 
     onToolComplete: (toolName, success, error) => {
       const ctx = sessions.get(channelId);
-      if (!ctx) return;
+      if (!ctx || ctx._keepalivePing) return;
       ctx._toolsCompleted = (ctx._toolsCompleted || 0) + 1;
       if (!success && error) {
         ctx.output?.append(`\n🩸 \`${toolName}\`: ${error}\n`);
@@ -494,6 +495,8 @@ function _buildSessionHooks(channelId, channel) {
       // Skip stale events from destroyed/reset sessions
       if (!sessions.has(channelId)) return;
       const ctx = sessions.get(channelId);
+      // Ignore onIdle triggered by keepalive pings
+      if (ctx?._keepalivePing) return;
       if (ctx) {
         // Guard against stale onIdle from a previous task finishing the current task's output
         const gen = ctx._taskGen;
@@ -663,6 +666,9 @@ async function _createSession(channelId, channel) {
   restoreGrants(channelId);
   restoreResponders(channelId);
 
+  // Start keepalive timer to prevent SDK session expiry
+  _startKeepalive(channelId, channel);
+
   return ctx;
 }
 
@@ -750,7 +756,42 @@ async function processQueue(channelId, channel) {
     typingInterval.unref();
     // IMPORTANT: timeout is the 2nd argument to sendAndWait(), NOT a property of the options object.
     // The SDK signature is: sendAndWait(options, timeout?) — default is 60s if not passed.
-    const response = await ctx.copilotSession.sendAndWait({ prompt }, TASK_TIMEOUT_MS);
+    let response;
+    try {
+      response = await ctx.copilotSession.sendAndWait({ prompt }, TASK_TIMEOUT_MS);
+    } catch (sendErr) {
+      // The Copilot SDK session may have expired after idle time.
+      // Recreate the session transparently and retry once.
+      if (sendErr.message?.includes("Session not found") && !ctx._sessionRetried) {
+        ctx._sessionRetried = true;
+        log.warn("Copilot session expired, recreating", { channelId, error: sendErr.message });
+        try { ctx.copilotSession.destroy(); } catch {}
+        _clearKeepalive(channelId);
+        const botName = channel.client?.user?.username || "Nyx";
+        const recentTasks = getRecentTasks(channelId, 10);
+        ctx.copilotSession = await createAgentSession({
+          channelId,
+          workspacePath: ctx.workspacePath,
+          model: ctx.model,
+          botInfo: { botName, branch: ctx.branch, baseBranch: getEffectiveBranch(channelId), recentTasks },
+          ..._buildSessionHooks(channelId, channel),
+        });
+        _startKeepalive(channelId, channel);
+        log.info("Copilot session recreated, retrying task", { channelId });
+        // Notify the channel so the user knows what happened
+        if (_notifyChannel) {
+          _notifyChannel(
+            channelId,
+            "🔮 **Session neu verbunden** — die Copilot-Session war abgelaufen und wurde automatisch neu erstellt~"
+          ).catch(() => {});
+        }
+        response = await ctx.copilotSession.sendAndWait({ prompt }, TASK_TIMEOUT_MS);
+      } else {
+        throw sendErr;
+      }
+    } finally {
+      ctx._sessionRetried = false;
+    }
     completeTask(ctx.taskId, "completed");
     log.info("Task completed", { channelId, taskId: ctx.taskId });
     ctx.status = "idle";
@@ -830,6 +871,7 @@ export async function resetSession(channelId) {
     await ctx.output?.finish("🔮 **Session zurückgesetzt~**");
     try { ctx.copilotSession.abort(); } catch {}
     try { ctx.copilotSession.destroy(); } catch {}
+    _clearKeepalive(channelId);
     for (const item of ctx.queue) {
       try {
         const err = new Error("Session reset");
@@ -864,6 +906,9 @@ export async function hardStop(channelId, clearQueue = true) {
   const wasWorking = ctx.status === "working";
   let queueCleared = 0;
 
+  // Capture channel before aborting — processQueue's finally will null ctx.output
+  const backupChannel = ctx.output?.channel;
+
   if (wasWorking) {
     ctx._aborted = true;
     try { ctx.copilotSession.abort(); } catch {}
@@ -871,17 +916,16 @@ export async function hardStop(channelId, clearQueue = true) {
       completeTask(ctx.taskId, "aborted");
       ctx.taskId = null;
     }
-    await ctx.output?.finish("💀 **Abgebrochen.**");
+    // Set idle BEFORE the await so processQueue's finally-kick sees "idle" status
     ctx.status = "idle";
     updateSessionStatus(channelId, "idle");
+    await ctx.output?.finish("💀 **Abgebrochen.**");
   }
 
-  // If keeping the queue, ensure processing continues after we set status to idle
+  // If keeping the queue, ensure processing continues
   if (!clearQueue && ctx.queue.length > 0 && wasWorking) {
     setImmediate(() => {
-      // channel is needed — try to resolve from the output or the session context
-      const target = ctx.output?.channel;
-      if (target) processQueue(channelId, target);
+      if (backupChannel) processQueue(channelId, backupChannel);
     });
   }
 
@@ -964,7 +1008,9 @@ export async function changeModel(channelId, channel, newModel) {
 
   // Success — destroy old session and swap in the new one
   try { ctx.copilotSession.destroy(); } catch {}
+  _clearKeepalive(channelId);
   ctx.copilotSession = newSession;
+  _startKeepalive(channelId, channel);
 
   // Persist to DB
   updateSessionModel(channelId, newModel);
@@ -1001,6 +1047,85 @@ export function hasWorkingSessions() {
   return false;
 }
 
+// ── SDK Session Keepalive ────────────────────────────────────────────────────
+
+/**
+ * Periodic keepalive timers per channel to prevent the Copilot SDK session
+ * from expiring during idle periods. Each timer sends a lightweight prompt
+ * to the SDK to reset its internal timeout.
+ * Map< channelId, NodeJS.Timeout >
+ */
+const _keepaliveTimers = new Map();
+
+/**
+ * Start a keepalive timer for a channel's Copilot session.
+ * Disabled when SESSION_KEEPALIVE_MS is 0.
+ */
+function _startKeepalive(channelId, channel) {
+  _clearKeepalive(channelId);
+  if (!SESSION_KEEPALIVE_MS || SESSION_KEEPALIVE_MS <= 0) return;
+
+  const timer = setInterval(async () => {
+    const ctx = sessions.get(channelId);
+    if (!ctx || ctx.status === "working" || ctx._changingModel) return;
+    ctx._keepalivePing = true;
+    try {
+      // Send a minimal prompt that produces no visible output
+      await ctx.copilotSession.sendAndWait(
+        { prompt: "You are being pinged to keep the session alive. Respond with exactly: OK" },
+        30_000
+      );
+      // NOTE: Do NOT update _lastActivity here — keepalive should not delay the 24h idle sweep
+    } catch (err) {
+      // Session died between keepalives — recreate proactively
+      if (err.message?.includes("Session not found")) {
+        log.warn("Keepalive detected expired session, recreating", { channelId });
+        try { ctx.copilotSession.destroy(); } catch {}
+        try {
+          const botName = channel.client?.user?.username || "Nyx";
+          const recentTasks = getRecentTasks(channelId, 10);
+          ctx.copilotSession = await createAgentSession({
+            channelId,
+            workspacePath: ctx.workspacePath,
+            model: ctx.model,
+            botInfo: { botName, branch: ctx.branch, baseBranch: getEffectiveBranch(channelId), recentTasks },
+            ..._buildSessionHooks(channelId, channel),
+          });
+          log.info("Session proactively recreated via keepalive", { channelId });
+          if (_notifyChannel) {
+            _notifyChannel(
+              channelId,
+              "\uD83D\uDD2E **Session neu verbunden** \u2014 die Copilot-Session war abgelaufen und wurde im Hintergrund neu erstellt~"
+            ).catch(() => {});
+          }
+        } catch (recreateErr) {
+          log.error("Failed to recreate session via keepalive", { channelId, error: recreateErr.message });
+          _clearKeepalive(channelId);
+        }
+      }
+      // Other errors (e.g. timeout) are non-fatal — just log and continue
+      else {
+        log.warn("Keepalive ping failed", { channelId, error: err.message });
+      }
+    } finally {
+      if (ctx) ctx._keepalivePing = false;
+    }
+  }, SESSION_KEEPALIVE_MS);
+  timer.unref();
+  _keepaliveTimers.set(channelId, timer);
+}
+
+/**
+ * Stop the keepalive timer for a channel.
+ */
+function _clearKeepalive(channelId) {
+  const timer = _keepaliveTimers.get(channelId);
+  if (timer) {
+    clearInterval(timer);
+    _keepaliveTimers.delete(channelId);
+  }
+}
+
 // ── Idle Session Sweep & Task Pruning ───────────────────────────────────────
 
 const IDLE_SWEEP_MS = 24 * 60 * 60_000; // 24 hours
@@ -1013,9 +1138,11 @@ async function _destroySession(channelId) {
   const ctx = sessions.get(channelId);
   if (!ctx) return;
   const worktreePath = ctx.workspacePath;
-  // Resolve repo path BEFORE deleting overrides so we prune the correct repo
+  // Resolve repo path BEFORE deleting from maps so we prune the correct repo
   let repoPath;
   try { repoPath = getEffectiveRepo(channelId).repoPath; } catch {}
+  // Remove from sessions map FIRST to prevent new tasks from using the dying session
+  sessions.delete(channelId);
   // Finish any active output before tearing down
   try { await ctx.output?.finish("🖤 **Session geschlossen (Inaktivität)~**"); } catch {}
   // Reject any queued tasks
@@ -1028,9 +1155,9 @@ async function _destroySession(channelId) {
   }
   try { cancelPushApproval(channelId); } catch {}
   try { ctx.copilotSession.destroy(); } catch {}
+  _clearKeepalive(channelId);
   revokeAllGrants(channelId);
   responderStore.delete(channelId);
-  sessions.delete(channelId);
   try { dbDeleteSession(channelId); } catch {}
   try { deleteRespondersByChannel(channelId); } catch {}
   // NOTE: repo/branch overrides are intentionally NOT deleted here.
@@ -1050,7 +1177,9 @@ function _sweepPausedSession(channelId) {
   if (!ctx) return;
   // Session was resumed (or reset) during the grace period — abort
   if (!ctx.paused || !ctx._pauseWarnedAt) return;
-  _destroySession(channelId);
+  _destroySession(channelId).then(() => {
+    log.info("Paused session swept after grace period", { channelId });
+  }).catch(() => {});
   if (_notifyChannel) {
     _notifyChannel(
       channelId,
@@ -1058,7 +1187,6 @@ function _sweepPausedSession(channelId) {
       "Schreib eine neue Nachricht um eine frische Session zu starten~"
     ).catch(() => {});
   }
-  log.info("Paused session swept after grace period", { channelId });
 }
 
 const _idleSweep = setInterval(() => {
@@ -1088,8 +1216,17 @@ const _idleSweep = setInterval(() => {
 
     if (ctx.queue.length > 0) continue;
     if (idle >= IDLE_SWEEP_MS) {
-      _destroySession(channelId);
-      log.info("Idle session swept", { channelId });
+      // Notify the channel before destroying
+      if (_notifyChannel) {
+        _notifyChannel(
+          channelId,
+          "🖤 **Session geschlossen** — 24h ohne Aktivität. " +
+          "Schreib eine neue Nachricht um eine frische Session zu starten~"
+        ).catch(() => {});
+      }
+      _destroySession(channelId).then(() => {
+        log.info("Idle session swept", { channelId });
+      }).catch(() => {});
     }
   }
   // Prune old task history
