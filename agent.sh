@@ -287,6 +287,11 @@ if [[ "$ENV_CHANGED" == "true" ]] && [[ -t 0 ]]; then
   echo ""
   read -rp "  ▸ Save to .env? [Y/n] " _save_answer
   if [[ -z "$_save_answer" || "$_save_answer" =~ ^[yYjJ] ]]; then
+    # Read existing .env BEFORE truncating so we can preserve extra keys
+    _existing_env=""
+    if [[ -f "$ENV_FILE" ]]; then
+      _existing_env=$(cat "$ENV_FILE")
+    fi
     {
       echo "# Discord Autopilot — auto-generated $(date +%Y-%m-%d)"
       echo "DISCORD_TOKEN=$DISCORD_TOKEN"
@@ -296,7 +301,7 @@ if [[ "$ENV_CHANGED" == "true" ]] && [[ -t 0 ]]; then
       [[ -n "${ADMIN_USER_ID:-}" ]]      && echo "ADMIN_USER_ID=$ADMIN_USER_ID"
       [[ -n "${STARTUP_CHANNEL_ID:-}" ]] && echo "STARTUP_CHANNEL_ID=$STARTUP_CHANNEL_ID"
       # preserve extra keys from existing .env
-      if [[ -f "$ENV_FILE" ]]; then
+      if [[ -n "$_existing_env" ]]; then
         while IFS= read -r line; do
           key="${line%%=*}"
           key="${key// /}"
@@ -304,7 +309,7 @@ if [[ "$ENV_CHANGED" == "true" ]] && [[ -t 0 ]]; then
             DISCORD_TOKEN|REPO_URL|GITHUB_TOKEN|DEFAULT_BRANCH|ADMIN_USER_ID|STARTUP_CHANNEL_ID|""|"#"*) ;;
             *) echo "$line" ;;
           esac
-        done < "$ENV_FILE"
+        done <<< "$_existing_env"
       fi
     } > "$ENV_FILE"
     ok ".env saved"
@@ -552,7 +557,6 @@ elif [[ -t 0 ]]; then
     read -rp "  ▸ Number (or Enter for remote default): " _pick
     if [[ -n "$_pick" ]] && [[ "$_pick" =~ ^[0-9]+$ ]] && (( _pick >= 1 && _pick <= ${#_branches[@]} )); then
       export DEFAULT_BRANCH="${_branches[$((_pick-1))]}"
-      ENV_CHANGED=true
       ok "DEFAULT_BRANCH set to '$DEFAULT_BRANCH'"
     else
       [[ -n "$_pick" ]] && warn "Invalid selection — using remote default."
@@ -570,7 +574,7 @@ info "Copying bot application files…"
 
 SRC_DIR="$SCRIPT_DIR/src"
 if [[ ! -d "$SRC_DIR" ]]; then
-  fatal "Source directory not found: $SRC_DIR"
+  die "Source directory not found: $SRC_DIR"
 fi
 
 mkdir -p "$APP/src" "$APP/llm"

@@ -103,10 +103,10 @@ Manuelle Testliste für alle Kernbereiche. Vor jedem Release durchgehen, Ergebni
 4. **Expected:** Neue Session wird erstellt, Antwort kommt
 
 ### D5 · /repo
-1. `/repo action:set url:epantke/remote-coding-agent`
+1. `/repo action:set url:epantke/discord-autopilot`
 2. **Expected:** Repo-Override gesetzt, Clone-Vorgang
 3. `/repo action:current`
-4. **Expected:** Zeigt `epantke/remote-coding-agent`
+4. **Expected:** Zeigt `epantke/discord-autopilot`
 5. `/repo action:reset`
 6. **Expected:** Zurück zum Default-Repo
 

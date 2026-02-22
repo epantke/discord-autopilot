@@ -1169,7 +1169,6 @@ client.on("interactionCreate", async (interaction) => {
           }
           break;
         }
-        break;
       }
 
       // ── /update ───────────────────────────────────────────────────────
@@ -1271,7 +1270,6 @@ client.on("interactionCreate", async (interaction) => {
           }
           break;
         }
-        break;
       }
 
       // ── /repo ────────────────────────────────────────────────────────────
@@ -1324,7 +1322,6 @@ client.on("interactionCreate", async (interaction) => {
           }
           break;
         }
-        break;
       }
 
       // ── /branch ──────────────────────────────────────────────────────────
@@ -1379,7 +1376,6 @@ client.on("interactionCreate", async (interaction) => {
           }
           break;
         }
-        break;
       }
 
       default:

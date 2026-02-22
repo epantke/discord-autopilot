@@ -25,7 +25,7 @@ import {
   deleteBranchOverride as dbDeleteBranchOverride,
   getAllBranchOverrides,
 } from "./state.mjs";
-import { createAgentSession, listAvailableModels } from "./copilot-client.mjs";
+import { createAgentSession } from "./copilot-client.mjs";
 import {
   getActiveGrants,
   restoreGrants,

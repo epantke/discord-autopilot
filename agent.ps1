@@ -92,7 +92,7 @@ Write-Host ''
 
 # ── Version & self-update ───────────────────────────────────────────────────────
 $ScriptVersion = '0.0.0-dev'
-$UpdateRepo = 'epantke/remote-coding-agent'
+$UpdateRepo = 'epantke/discord-autopilot'
 $UpdateApiUrl = "https://api.github.com/repos/$UpdateRepo/releases/latest"
 
 if ($Update) {
@@ -906,7 +906,6 @@ if ($cfgBranch) {
             if ($idx -ge 0 -and $idx -lt $branches.Count) {
                 $cfgBranch = $branches[$idx]
                 [Environment]::SetEnvironmentVariable('DEFAULT_BRANCH', $cfgBranch, 'Process')
-                $script:EnvChanged = $true
                 Write-Ok "DEFAULT_BRANCH set to '$cfgBranch'"
             } else {
                 Write-Warn 'Invalid selection — using remote default.'
