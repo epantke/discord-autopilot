@@ -185,6 +185,13 @@ export async function setChannelRepo(channelId, channel, input) {
   // Reset existing session if any
   await resetSession(channelId);
 
+  // Clear branch override — it was validated against the old repo and may not exist in the new one
+  if (branchOverrides.has(channelId)) {
+    branchOverrides.delete(channelId);
+    dbDeleteBranchOverride(channelId);
+    log.info("Branch override cleared due to repo change", { channelId });
+  }
+
   // Store override
   repoOverrides.set(channelId, { repoUrl: parsed.cloneUrl, repoPath, projectName });
   upsertRepoOverride(channelId, parsed.cloneUrl, repoPath, projectName);
@@ -211,6 +218,14 @@ export async function clearChannelRepo(channelId) {
   const had = repoOverrides.has(channelId);
   repoOverrides.delete(channelId);
   deleteRepoOverride(channelId);
+
+  // Clear branch override — it was validated against the old repo
+  if (branchOverrides.has(channelId)) {
+    branchOverrides.delete(channelId);
+    dbDeleteBranchOverride(channelId);
+    log.info("Branch override cleared due to repo reset", { channelId });
+  }
+
   await resetSession(channelId);
   return had;
 }
@@ -327,6 +342,9 @@ async function createWorktree(channelId) {
       if (stdout.trim()) baseRef = `origin/${baseBranch}`;
     } catch {
       log.warn("Base branch not found on remote, falling back to HEAD", { baseBranch, channelId });
+      // Clear the stale override so user isn't silently on the wrong branch
+      branchOverrides.delete(channelId);
+      dbDeleteBranchOverride(channelId);
     }
   }
 

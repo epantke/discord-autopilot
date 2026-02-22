@@ -1271,6 +1271,61 @@ client.on("interactionCreate", async (interaction) => {
         break;
       }
 
+      // ── /branch ──────────────────────────────────────────────────────────
+      case "branch": {
+        const action = interaction.options.getString("action");
+
+        if (action === "current") {
+          const info = getChannelBranch(channelId);
+          if (info.isOverride) {
+            await interaction.reply({
+              content: `🔮 **Aktueller Branch:** \`${info.branch}\` (Channel-Override)`,
+              flags: MessageFlags.Ephemeral,
+            });
+          } else {
+            await interaction.reply({
+              content: info.branch
+                ? `🔮 **Standard-Branch:** \`${info.branch}\` (global)`
+                : "🔮 **Kein Branch konfiguriert** — nutzt den Default-Branch des Repos.",
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+          break;
+        }
+
+        if (action === "set") {
+          const name = interaction.options.getString("name");
+          if (!name) {
+            await interaction.reply({
+              content: "🥀 `name` Option angeben — z.B. `main`, `develop`~",
+              flags: MessageFlags.Ephemeral,
+            });
+            break;
+          }
+
+          await interaction.deferReply();
+          const result = await setChannelBranch(channelId, name);
+          if (result.ok) {
+            await interaction.editReply(`💜 Branch für diesen Channel auf \`${name}\` gesetzt~ Session wird neu erstellt.`);
+          } else {
+            await interaction.editReply(`🩸 ${redactSecrets(result.error).clean}`);
+          }
+          break;
+        }
+
+        if (action === "reset") {
+          await interaction.deferReply();
+          const had = await clearChannelBranch(channelId);
+          if (had) {
+            await interaction.editReply("💜 Branch-Override entfernt. Zurück zum Standard-Branch~");
+          } else {
+            await interaction.editReply("🥀 Kein Branch-Override aktiv.");
+          }
+          break;
+        }
+        break;
+      }
+
       default:
         await interaction.reply({ content: "Unbekannter Command~", flags: MessageFlags.Ephemeral });
     }
