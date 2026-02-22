@@ -113,6 +113,9 @@ export function restoreGrants(channelId) {
     if (expiry <= now) continue; // skip expired
     const remaining = expiry - now;
     const grants = channelGrants(channelId);
+    // Clear any existing timer to prevent leaks on double-restore
+    const existing = grants.get(row.path);
+    if (existing?.timer) clearTimeout(existing.timer);
     const timer = setTimeout(() => {
       revokeGrant(channelId, row.path);
     }, remaining);

@@ -227,6 +227,8 @@ function isAllowed(interaction) {
 
   if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(interaction.guildId)) return false;
   if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(interaction.channelId)) return false;
+  // ADMIN_USER_ID always has access, even without admin roles
+  if (ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID) return true;
   if (ADMIN_ROLE_IDS) {
     if (!hasAnyRole(interaction.member, ADMIN_ROLE_IDS)) return false;
   }
@@ -234,10 +236,10 @@ function isAllowed(interaction) {
 }
 
 function isAdmin(interaction) {
-  // DM users must match ADMIN_USER_ID to be treated as admin
-  if (!interaction.guildId) {
-    return ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID;
-  }
+  // ADMIN_USER_ID is always admin, regardless of context
+  if (ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID) return true;
+  // DM users without ADMIN_USER_ID match are not admins
+  if (!interaction.guildId) return false;
   if (!ADMIN_ROLE_IDS) return true;
   return hasAnyRole(interaction.member, ADMIN_ROLE_IDS);
 }
@@ -687,7 +689,7 @@ async function sendStartupNotification({ envIssues, recoveryInfo } = {}) {
       const guild = client.guilds.cache.first();
       if (guild) {
         const fallback = guild.systemChannel
-          ?? guild.channels.cache.find((c) => c.isTextBased() && c.permissionsFor(guild.members.me)?.has("SendMessages"));
+          ?? guild.channels.cache.find((c) => c.isTextBased() && guild.members.me && c.permissionsFor(guild.members.me)?.has("SendMessages"));
         if (fallback) {
           await fallback.send({ embeds: [embed] });
           log.info("Startup notification sent to fallback channel", { channelId: fallback.id, guildId: guild.id });
@@ -763,7 +765,8 @@ async function performAutoUpdate(updateInfo) {
         { color: 0x2ecc71, title: "✅ Update Applied" }
       );
       // Brief delay to let Discord messages send
-      await new Promise((r) => setTimeout(r, 2_000));
+      await new Promise((r) => { const t = setTimeout(r, 2_000); t.unref(); });
+      _autoUpdateInProgress = false;
       restartBot();
     } else {
       log.error("Auto-update failed", { reason: result.reason });
@@ -1175,7 +1178,8 @@ client.on("interactionCreate", async (interaction) => {
                 )
                 .setTimestamp()],
             });
-            setTimeout(() => restartBot(), 2_000);
+            const t = setTimeout(() => restartBot(), 2_000);
+            t.unref();
           } else {
             await interaction.editReply({
               embeds: [new EmbedBuilder()
@@ -1310,7 +1314,7 @@ client.on("messageCreate", async (message) => {
   if (!message.channel.isThread() && message.mentions.has(client.user)) {
     if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(message.guildId)) return;
     if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(message.channel.id)) return;
-    if (ADMIN_ROLE_IDS && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
+    if (ADMIN_ROLE_IDS && !(ADMIN_USER_ID && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
 
     // Strip the bot mention from the prompt
     const prompt = message.content
@@ -1362,9 +1366,7 @@ client.on("messageCreate", async (message) => {
   // If the agent is waiting for a question answer, don't enqueue as follow-up
   if (isAwaitingQuestion(parentId)) return;
 
-  if (ADMIN_ROLE_IDS) {
-    if (!hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
-  }
+  if (ADMIN_ROLE_IDS && !(ADMIN_USER_ID && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
 
   const prompt = message.content.trim();
   if (!prompt) return;

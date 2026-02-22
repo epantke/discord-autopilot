@@ -84,7 +84,7 @@ function getEffectiveRepo(channelId) {
 function parseRepoInput(input) {
   input = input.trim();
   // Handle owner/repo format
-  const shortMatch = input.match(/^([\w.-]+)\/([\w.-]+)$/);
+  const shortMatch = input.match(/^([\w.-]+)\/([\w.-]+?)(?:\.git)?$/);
   if (shortMatch) {
     return { owner: shortMatch[1], repo: shortMatch[2], cloneUrl: `https://github.com/${shortMatch[1]}/${shortMatch[2]}.git` };
   }
@@ -533,17 +533,19 @@ async function processQueue(channelId, channel) {
   ctx._toolsCompleted = 0;
   ctx._taskGen++;
   const taskGen = ctx._taskGen;
-  updateSessionStatus(channelId, "working");
-  ctx.output = new DiscordOutput(outputChannel);
-  ctx.taskId = insertTask(channelId, prompt, userId);
-  log.info("Task started", { channelId, taskId: ctx.taskId, prompt: prompt.slice(0, 100) });
 
   // Typing indicator while agent is working
-  outputChannel.sendTyping().catch(() => {});
-  const typingInterval = setInterval(() => outputChannel.sendTyping().catch(() => {}), 8_000);
-  typingInterval.unref();
+  let typingInterval;
 
   try {
+    updateSessionStatus(channelId, "working");
+    ctx.output = new DiscordOutput(outputChannel);
+    ctx.taskId = insertTask(channelId, prompt, userId);
+    log.info("Task started", { channelId, taskId: ctx.taskId, prompt: prompt.slice(0, 100) });
+
+    outputChannel.sendTyping().catch(() => {});
+    typingInterval = setInterval(() => outputChannel.sendTyping().catch(() => {}), 8_000);
+    typingInterval.unref();
     // IMPORTANT: timeout is the 2nd argument to sendAndWait(), NOT a property of the options object.
     // The SDK signature is: sendAndWait(options, timeout?) — default is 60s if not passed.
     const response = await ctx.copilotSession.sendAndWait({ prompt }, TASK_TIMEOUT_MS);
@@ -573,7 +575,7 @@ async function processQueue(channelId, channel) {
     err._reportedByOutput = true;
     reject(err);
   } finally {
-    clearInterval(typingInterval);
+    if (typingInterval) clearInterval(typingInterval);
     // Only clear output if this task is still the active one (guards against /stop race)
     if (ctx._taskGen === taskGen) {
       ctx.output = null;
@@ -620,6 +622,7 @@ export function getSessionStatus(channelId) {
 export async function resetSession(channelId) {
   const ctx = sessions.get(channelId);
   if (ctx) {
+    ctx._aborted = true;
     try { ctx.copilotSession.abort(); } catch {}
     try { ctx.copilotSession.destroy(); } catch {}
     for (const item of ctx.queue) {
@@ -744,6 +747,12 @@ export async function changeModel(channelId, channel, newModel) {
   // Persist to DB
   updateSessionModel(channelId, newModel);
   log.info("Model changed", { channelId, from: oldModel, to: newModel });
+
+  // Kick the queue in case tasks were enqueued during the model change
+  if (ctx.queue.length > 0) {
+    processQueue(channelId, channel);
+  }
+
   return { ok: true };
 }
 

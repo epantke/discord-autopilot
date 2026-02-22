@@ -23,8 +23,10 @@ export class DiscordOutput {
     this._cleanedContent = "";
     /** Raw content not yet scanned */
     this._pendingContent = "";
-    /** Tail of the previous raw chunk, re-scanned to catch tokens split across flushes */
-    this._overlapBuffer = "";
+    /** All raw content accumulated (for re-scanning) */
+    this._rawAccum = "";
+    /** How many chars of scanned output have been committed to _cleanedContent */
+    this._totalCleanAppended = 0;
     this.dirty = false;
     this.message = null;
     this.lastEdit = 0;
@@ -69,8 +71,9 @@ export class DiscordOutput {
     }
     if (epilogue) {
       this._pendingContent += `\n${epilogue}`;
-      this.dirty = true;
     }
+    // Always flush on finish to release any held-back content
+    this.dirty = true;
     try {
       await this.flush();
     } catch (err) {
@@ -93,18 +96,23 @@ export class DiscordOutput {
     try {
       const footer = this._statusFooter ? `\n${this._statusFooter}` : "";
 
-      // Incrementally scan newly appended content with overlap to catch tokens split across flushes
-      if (this._pendingContent) {
-        const scanInput = this._overlapBuffer + this._pendingContent;
-        const scanned = redactSecrets(scanInput).clean;
-        // Remove the already-emitted overlap prefix from the scanned result
-        const overlapLen = this._overlapBuffer.length;
-        this._cleanedContent += scanned.slice(overlapLen);
-        // Keep tail of the raw input as overlap for the next cycle
-        this._overlapBuffer = this._pendingContent.length > REDACT_OVERLAP
-          ? this._pendingContent.slice(-REDACT_OVERLAP)
-          : this._pendingContent;
+      // Accumulate raw content and re-scan to catch tokens split across flush boundaries.
+      // Hold back the last REDACT_OVERLAP chars of scanned output to prevent partial secret emission.
+      if (this._pendingContent || this.finished) {
+        this._rawAccum += this._pendingContent;
         this._pendingContent = "";
+
+        if (this._rawAccum) {
+          const scanned = redactSecrets(this._rawAccum).clean;
+          const safeLen = this.finished
+            ? scanned.length
+            : Math.max(this._totalCleanAppended, scanned.length - REDACT_OVERLAP);
+
+          if (safeLen > this._totalCleanAppended) {
+            this._cleanedContent += scanned.slice(this._totalCleanAppended, safeLen);
+            this._totalCleanAppended = safeLen;
+          }
+        }
       }
 
       // If permanent content exceeds threshold, split (footer stays with remainder)

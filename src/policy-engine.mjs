@@ -1,5 +1,5 @@
 import { realpathSync } from "node:fs";
-import { resolve, sep } from "node:path";
+import { resolve, sep, dirname, basename } from "node:path";
 import { createLogger } from "./logger.mjs";
 
 const log = createLogger("policy");
@@ -8,14 +8,19 @@ const log = createLogger("policy");
 
 /**
  * Resolves a path to its real absolute form (following symlinks).
- * Returns null if the path doesn't exist.
+ * For non-existent paths, resolves the nearest existing parent to catch symlink escapes.
  */
 function safePath(p) {
   try {
     return realpathSync(resolve(p));
   } catch {
-    // Path doesn't exist yet — resolve without symlink traversal
-    return resolve(p);
+    // Path doesn't exist yet — resolve parent to follow symlinks in the directory chain
+    const resolved = resolve(p);
+    try {
+      return realpathSync(dirname(resolved)) + sep + basename(resolved);
+    } catch {
+      return resolved;
+    }
   }
 }
 
