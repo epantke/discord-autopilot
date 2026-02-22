@@ -33,7 +33,7 @@ const ADMIN_ROLE_IDS = csvToValidatedSet(process.env.ADMIN_ROLE_IDS, "ADMIN_ROLE
 // ── Tunables ────────────────────────────────────────────────────────────────
 function safeInt(envVal, fallback) {
   const n = parseInt(envVal, 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
 const DISCORD_EDIT_THROTTLE_MS = safeInt(

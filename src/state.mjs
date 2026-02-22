@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { mkdirSync, existsSync, copyFileSync } from "node:fs";
+import { mkdirSync, existsSync, copyFileSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
 import { STATE_DB_PATH } from "./config.mjs";
 import { createLogger } from "./logger.mjs";
@@ -23,6 +23,10 @@ try {
       copyFileSync(STATE_DB_PATH, backupPath);
       log.info("Corrupt DB backed up", { path: backupPath });
     } catch { /* best effort */ }
+    // Remove WAL/SHM files to prevent old journal applying to the new DB
+    for (const suffix of ["-wal", "-shm"]) {
+      try { unlinkSync(STATE_DB_PATH + suffix); } catch { /* may not exist */ }
+    }
   }
   db = new Database(STATE_DB_PATH);
   db.pragma("journal_mode = WAL");
@@ -93,62 +97,70 @@ function runMigrations() {
   let v = getSchemaVersion();
 
   if (v < 1) {
-    // v1: Add model column if missing
-    const cols = db.pragma("table_info(sessions)").map((c) => c.name);
-    if (!cols.includes("model")) {
-      db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`);
-    }
-    setSchemaVersion(1);
+    db.transaction(() => {
+      const cols = db.pragma("table_info(sessions)").map((c) => c.name);
+      if (!cols.includes("model")) {
+        db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`);
+      }
+      setSchemaVersion(1);
+    })();
     v = 1;
   }
 
   if (v < 2) {
-    const cols = db.pragma("table_info(task_history)").map((c) => c.name);
-    if (!cols.includes("user_id")) {
-      db.exec(`ALTER TABLE task_history ADD COLUMN user_id TEXT`);
-    }
-    setSchemaVersion(2);
+    db.transaction(() => {
+      const cols = db.pragma("table_info(task_history)").map((c) => c.name);
+      if (!cols.includes("user_id")) {
+        db.exec(`ALTER TABLE task_history ADD COLUMN user_id TEXT`);
+      }
+      setSchemaVersion(2);
+    })();
     v = 2;
   }
 
   if (v < 3) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS usage_log (
-        id                INTEGER PRIMARY KEY AUTOINCREMENT,
-        channel_id        TEXT NOT NULL,
-        task_id           INTEGER,
-        prompt_tokens     INTEGER NOT NULL DEFAULT 0,
-        completion_tokens INTEGER NOT NULL DEFAULT 0,
-        requests          INTEGER NOT NULL DEFAULT 1,
-        model             TEXT,
-        cost_eur          REAL NOT NULL DEFAULT 0,
-        created_at        TEXT NOT NULL DEFAULT (datetime('now'))
-      )
-    `);
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_usage_log_created ON usage_log(created_at)`);
-    db.exec(`CREATE INDEX IF NOT EXISTS idx_usage_log_channel ON usage_log(channel_id)`);
-    setSchemaVersion(3);
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS usage_log (
+          id                INTEGER PRIMARY KEY AUTOINCREMENT,
+          channel_id        TEXT NOT NULL,
+          task_id           INTEGER,
+          prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+          completion_tokens INTEGER NOT NULL DEFAULT 0,
+          requests          INTEGER NOT NULL DEFAULT 1,
+          model             TEXT,
+          cost_eur          REAL NOT NULL DEFAULT 0,
+          created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_usage_log_created ON usage_log(created_at)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_usage_log_channel ON usage_log(channel_id)`);
+      setSchemaVersion(3);
+    })();
     v = 3;
   }
 
   if (v < 4) {
-    // usage_log was created in v3 for cost monitoring, which has been removed
-    db.exec(`DROP TABLE IF EXISTS usage_log`);
-    setSchemaVersion(4);
+    db.transaction(() => {
+      db.exec(`DROP TABLE IF EXISTS usage_log`);
+      setSchemaVersion(4);
+    })();
     v = 4;
   }
 
   if (v < 5) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS repo_overrides (
-        channel_id   TEXT PRIMARY KEY,
-        repo_url     TEXT NOT NULL,
-        repo_path    TEXT NOT NULL,
-        project_name TEXT NOT NULL,
-        set_at       TEXT NOT NULL DEFAULT (datetime('now'))
-      )
-    `);
-    setSchemaVersion(5);
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS repo_overrides (
+          channel_id   TEXT PRIMARY KEY,
+          repo_url     TEXT NOT NULL,
+          repo_path    TEXT NOT NULL,
+          project_name TEXT NOT NULL,
+          set_at       TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      setSchemaVersion(5);
+    })();
     v = 5;
   }
 

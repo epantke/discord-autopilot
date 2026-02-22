@@ -53,6 +53,12 @@ const responderStore = new Map();
  */
 const repoOverrides = new Map();
 
+/**
+ * In-flight clone promises to prevent concurrent clones for the same project.
+ * Map< projectName, Promise<string> >
+ */
+const _pendingClones = new Map();
+
 // Restore repo overrides from DB on startup
 for (const row of getAllRepoOverrides()) {
   repoOverrides.set(row.channel_id, {
@@ -95,6 +101,20 @@ function parseRepoInput(input) {
  * Uses GITHUB_TOKEN for auth if available.
  */
 async function cloneRepo(cloneUrl, projectName) {
+  // Deduplicate concurrent clones for the same project
+  if (_pendingClones.has(projectName)) {
+    return _pendingClones.get(projectName);
+  }
+  const promise = _cloneRepoInner(cloneUrl, projectName);
+  _pendingClones.set(projectName, promise);
+  try {
+    return await promise;
+  } finally {
+    _pendingClones.delete(projectName);
+  }
+}
+
+async function _cloneRepoInner(cloneUrl, projectName) {
   const repoPath = join(REPOS_ROOT, projectName);
   mkdirSync(REPOS_ROOT, { recursive: true });
 
@@ -414,6 +434,7 @@ async function _createSession(channelId, channel) {
     awaitingQuestion: false,
     _toolsCompleted: 0,
     _lastActivity: Date.now(),
+    _taskGen: 0,
   };
 
   sessions.set(channelId, ctx);
@@ -497,6 +518,8 @@ async function processQueue(channelId, channel) {
   ctx.status = "working";
   ctx.currentPrompt = prompt;
   ctx._toolsCompleted = 0;
+  ctx._taskGen++;
+  const taskGen = ctx._taskGen;
   updateSessionStatus(channelId, "working");
   ctx.output = new DiscordOutput(outputChannel);
   ctx.taskId = insertTask(channelId, prompt, userId);
@@ -538,8 +561,11 @@ async function processQueue(channelId, channel) {
     reject(err);
   } finally {
     clearInterval(typingInterval);
-    ctx.output = null;
-    ctx.currentPrompt = null;
+    // Only clear output if this task is still the active one (guards against /stop race)
+    if (ctx._taskGen === taskGen) {
+      ctx.output = null;
+      ctx.currentPrompt = null;
+    }
     ctx._lastActivity = Date.now();
     // Continue queue unless paused (use setImmediate to avoid stack overflow)
     if (!ctx.paused) {
@@ -836,5 +862,5 @@ const _idleSweep = setInterval(() => {
   // Prune old task history
   const pruned = pruneOldTasks();
   if (pruned > 0) log.info("Pruned old tasks", { count: pruned });
-}, IDLE_SWEEP_MS);
+}, IDLE_SWEEP_MS / 2);
 _idleSweep.unref();

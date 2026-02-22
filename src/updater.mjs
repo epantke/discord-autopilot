@@ -14,7 +14,7 @@ const CACHE_TTL_MS = 5 * 60_000;
 // ── Version comparison ──────────────────────────────────────────────────────
 
 function parseVer(v) {
-  return (v || "").replace(/^v/, "").split(".").map(Number);
+  return (v || "").replace(/^v/, "").split("-")[0].split(".").map(Number);
 }
 
 function isNewer(latest, current) {
@@ -163,6 +163,11 @@ export async function downloadAndApplyUpdate() {
 
 export function restartBot() {
   log.info("Restarting bot for update");
-  // Trigger the graceful shutdown handler instead of raw exit
-  process.kill(process.pid, "SIGTERM");
+  // On Windows, process.kill(pid, 'SIGTERM') calls TerminateProcess() which
+  // skips the JS signal handler. Use process.emit() to trigger graceful shutdown.
+  if (process.platform === "win32") {
+    process.emit("SIGTERM");
+  } else {
+    process.kill(process.pid, "SIGTERM");
+  }
 }

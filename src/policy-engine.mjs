@@ -200,6 +200,14 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
     // Scan for ALL cd's into paths outside workspace
     for (const cdMatch of cmd.matchAll(/\b(?:cd|pushd)\s+(?:--\s+)?(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g)) {
       const rawTarget = cdMatch[1] || cdMatch[2] || cdMatch[3];
+      // Block cd - / pushd - — shell navigates to previous directory which may be outside workspace
+      if (rawTarget === "-") {
+        return {
+          decision: "deny",
+          reason: `Shell cd to previous directory (\`-\`) is not allowed — target cannot be statically verified`,
+          gate: "outside",
+        };
+      }
       // Block tilde expansion — shell expands ~ to home dir, bypassing resolve()
       if (rawTarget === "~" || rawTarget.startsWith("~/")) {
         return {

@@ -57,6 +57,7 @@ export class DiscordOutput {
    * Final flush — send remaining content, send as attachment if too large.
    */
   async finish(epilogue = "") {
+    if (this.finished) return;
     this.finished = true;
     this._statusFooter = "";
     if (this.editTimer) {

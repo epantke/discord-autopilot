@@ -105,8 +105,8 @@ export async function createAgentSession(opts) {
   };
 
   let creationTimer;
-  const session = await Promise.race([
-    copilot.createSession({
+  let timedOut = false;
+  const creationPromise = copilot.createSession({
     ...sessionConfig,
 
     // Approve all native permission requests (our policy is in onPreToolUse)
@@ -200,9 +200,13 @@ export async function createAgentSession(opts) {
             "6. Provide clear summaries of what you changed and why.",
           ].join("\n"),
     },
-  }),
+  });
+  // Destroy orphaned session if timeout fires first
+  creationPromise.then((s) => { if (timedOut) { try { s.destroy(); } catch {} } }).catch(() => {});
+  const session = await Promise.race([
+    creationPromise,
     new Promise((_, reject) => {
-      creationTimer = setTimeout(() => reject(new Error("Copilot session creation timed out after 60s")), 60_000);
+      creationTimer = setTimeout(() => { timedOut = true; reject(new Error("Copilot session creation timed out after 60s")); }, 60_000);
       creationTimer.unref();
     }),
   ]);

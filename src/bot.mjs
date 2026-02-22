@@ -218,9 +218,11 @@ const commands = [
 function isAllowed(interaction) {
   const isDM = !interaction.guildId;
 
-  // DMs: only allow if ADMIN_USER_ID is set and matches the sender
+  // DMs: allow ADMIN_USER_ID and ALLOWED_DM_USERS
   if (isDM) {
-    return ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID;
+    if (ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID) return true;
+    if (ALLOWED_DM_USERS && ALLOWED_DM_USERS.has(interaction.user.id)) return true;
+    return false;
   }
 
   if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(interaction.guildId)) return false;
@@ -743,7 +745,7 @@ async function performAutoUpdate(updateInfo) {
         log.warn("Auto-update: timed out waiting for idle sessions — proceeding anyway");
         break;
       }
-      await new Promise((r) => setTimeout(r, 10_000));
+      await new Promise((r) => { const t = setTimeout(r, 10_000); t.unref(); });
     }
 
     await notifyUpdate(

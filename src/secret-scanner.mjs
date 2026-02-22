@@ -36,7 +36,7 @@ const REDACTED = "[REDACTED]";
  * Returns { clean, found } where found is an array of labels.
  */
 export function redactSecrets(text) {
-  if (!text) return { clean: text, found: [] };
+  if (typeof text !== "string") return { clean: String(text ?? ""), found: [] };
   let clean = text;
   const found = [];
 
