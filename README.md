@@ -49,24 +49,19 @@ Send a DM or @mention in Discord — the agent edits files, runs tests, commits,
 
 **Prerequisites:** Git, Node.js ≥ 18, npm, [Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli) (authenticated)
 
-<table>
-<tr><th>Linux / macOS</th><th>Windows (PowerShell)</th></tr>
-<tr><td>
+#### Linux / macOS
 
 ```bash
 curl -fsSL https://github.com/epantke/discord-autopilot/releases/latest/download/agent.sh -o agent.sh && bash agent.sh
 ```
 
-</td><td>
+#### Windows (PowerShell)
 
 ```powershell
 irm https://github.com/epantke/discord-autopilot/releases/latest/download/agent.ps1 -OutFile agent.ps1; .\agent.ps1
 ```
 
-</td></tr>
-</table>
-
-Both scripts include an interactive setup wizard — just paste and run, the script guides you through everything.
+> **That's it.** Both scripts include an interactive setup wizard — just paste and run. You'll be guided through token setup, repo selection, and optional config. Everything is saved to a `.env` file for next time.
 
 ## Discord Bot Setup
 
