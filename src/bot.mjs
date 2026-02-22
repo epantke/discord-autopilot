@@ -21,6 +21,7 @@ import {
   ALLOWED_GUILDS,
   ALLOWED_CHANNELS,
   ADMIN_ROLE_IDS,
+  ALLOWED_ROLE_IDS,
   ALLOWED_DM_USERS,
   PROJECT_NAME,
   DISCORD_EDIT_THROTTLE_MS,
@@ -40,6 +41,7 @@ import {
   CURRENT_VERSION,
   UPDATE_CHECK_INTERVAL_MS,
   AUTO_RETRY_ON_CRASH,
+  AUTO_UPDATE,
 } from "./config.mjs";
 
 import {
@@ -259,8 +261,12 @@ function isAllowed(interaction) {
   }
   // ADMIN_USER_ID always has access, even without admin roles
   if (ADMIN_USER_ID && interaction.user.id === ADMIN_USER_ID) return true;
-  if (ADMIN_ROLE_IDS) {
-    if (!hasAnyRole(interaction.member, ADMIN_ROLE_IDS)) return false;
+  // ALLOWED_ROLE_IDS gates general access; falls back to ADMIN_ROLE_IDS for backward compat.
+  // Admin role holders always pass (admins are a superset of allowed users).
+  const accessRoles = ALLOWED_ROLE_IDS || ADMIN_ROLE_IDS;
+  if (accessRoles) {
+    if (ADMIN_ROLE_IDS && hasAnyRole(interaction.member, ADMIN_ROLE_IDS)) return true;
+    if (!hasAnyRole(interaction.member, accessRoles)) return false;
   }
   return true;
 }
@@ -431,7 +437,7 @@ client.once(Events.ClientReady, async () => {
     status: "online",
   });
 
-  startUpdateChecker();
+  if (AUTO_UPDATE) startUpdateChecker();
 });
 
 /** Build the startup embed once and reuse for channel + DM. */
@@ -799,8 +805,14 @@ async function performAutoUpdate(updateInfo) {
     const start = Date.now();
     while (hasWorkingSessions()) {
       if (Date.now() - start > maxWait) {
-        log.warn("Auto-update: timed out waiting for idle sessions — proceeding anyway");
-        break;
+        log.warn("Auto-update: timed out waiting for idle sessions — deferring update");
+        _autoUpdateInProgress = false;
+        _lastNotifiedVersion = null;
+        await notifyUpdate(
+          `⏳ Update to **v${updateInfo.latestVersion}** deferred — active sessions did not finish within ${Math.round(maxWait / 60_000)} min.\nWill retry on next check cycle.`,
+          { color: 0xFFAA00, title: "⏳ Update Deferred" }
+        );
+        return;
       }
       await new Promise((r) => { const t = setTimeout(r, 10_000); t.unref(); });
     }
@@ -1445,7 +1457,8 @@ client.on("messageCreate", async (message) => {
   if (!message.channel.isThread() && message.mentions.has(client.user)) {
     if (ALLOWED_GUILDS && !ALLOWED_GUILDS.has(message.guildId)) return;
     if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(message.channel.id)) return;
-    if (ADMIN_ROLE_IDS && !(ADMIN_USER_ID && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
+    const mentionRoles = ALLOWED_ROLE_IDS || ADMIN_ROLE_IDS;
+    if (mentionRoles && !(ADMIN_USER_ID && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, mentionRoles)) return;
 
     // Strip the bot mention from the prompt
     const prompt = message.content
@@ -1501,7 +1514,8 @@ client.on("messageCreate", async (message) => {
   // If the agent is waiting for a question answer, don't enqueue as follow-up
   if (isAwaitingQuestion(parentId)) return;
 
-  if (ADMIN_ROLE_IDS && !(ADMIN_USER_ID && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
+  const threadRoles = ALLOWED_ROLE_IDS || ADMIN_ROLE_IDS;
+  if (threadRoles && !(ADMIN_USER_ID && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, threadRoles)) return;
 
   const prompt = message.content.trim();
   if (!prompt) return;

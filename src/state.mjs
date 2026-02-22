@@ -194,12 +194,13 @@ function runMigrations() {
 
   // Future migrations go here as `if (v < 7) { ... setSchemaVersion(7); }`
   } catch (migrationErr) {
-    log.error("Migration failed — backing up DB and continuing with current schema", { error: migrationErr.message });
+    log.error("Migration failed — cannot start with inconsistent schema", { error: migrationErr.message });
     try {
       const backupPath = STATE_DB_PATH + ".pre-migration." + Date.now();
       copyFileSync(STATE_DB_PATH, backupPath);
       log.info("Pre-migration DB backed up", { path: backupPath });
     } catch { /* best effort */ }
+    process.exit(1);
   }
 }
 

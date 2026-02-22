@@ -35,6 +35,7 @@ const REPO_PATH = env("REPO_PATH") || join(REPOS_ROOT, PROJECT_NAME);
 const ALLOWED_GUILDS = csvToValidatedSet(env("ALLOWED_GUILDS"), "ALLOWED_GUILDS");
 const ALLOWED_CHANNELS = csvToValidatedSet(env("ALLOWED_CHANNELS"), "ALLOWED_CHANNELS");
 const ADMIN_ROLE_IDS = csvToValidatedSet(env("ADMIN_ROLE_IDS"), "ADMIN_ROLE_IDS");
+const ALLOWED_ROLE_IDS = csvToValidatedSet(env("ALLOWED_ROLE_IDS"), "ALLOWED_ROLE_IDS");
 
 // ── Tunables ────────────────────────────────────────────────────────────────
 function safeInt(envVal, fallback, min = 0) {
@@ -118,6 +119,9 @@ const AUTO_RETRY_ON_CRASH = (env("AUTO_RETRY_ON_CRASH") || "false").toLowerCase(
 // When true, git push commands are auto-approved without Discord button confirmation.
 const AUTO_APPROVE_PUSH = (env("AUTO_APPROVE_PUSH") || "false").toLowerCase() === "true";
 
+// Auto-update: set to "false" to disable the automatic update checker.
+const AUTO_UPDATE = (env("AUTO_UPDATE") || "true").toLowerCase() !== "false";
+
 // ── Version ─────────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CURRENT_VERSION = (() => {
@@ -145,6 +149,7 @@ export {
   ALLOWED_GUILDS,
   ALLOWED_CHANNELS,
   ADMIN_ROLE_IDS,
+  ALLOWED_ROLE_IDS,
   ALLOWED_DM_USERS,
   DISCORD_EDIT_THROTTLE_MS,
   DEFAULT_GRANT_MODE,
@@ -162,6 +167,7 @@ export {
   AGENT_SCRIPT_PATH,
   AUTO_RETRY_ON_CRASH,
   AUTO_APPROVE_PUSH,
+  AUTO_UPDATE,
   DEFAULT_BRANCH,
   PAUSE_GRACE_MS,
   SESSION_KEEPALIVE_MS,

@@ -457,12 +457,12 @@ function _buildSessionHooks(channelId, channel) {
     onPushRequest: async (command) => {
       if (AUTO_APPROVE_PUSH) return { approved: true };
       const ctx = sessions.get(channelId);
-      return createPushApprovalRequest(ctx?.output?.channel || channel, ctx?.workspacePath || "", command, channelId);
+      return createPushApprovalRequest(ctx?.output?.channel || ctx?._parentChannel || channel, ctx?.workspacePath || "", command, channelId);
     },
 
     onOutsideRequest: (reason) => {
       const ctx = sessions.get(channelId);
-      const target = ctx?.output?.channel || channel;
+      const target = ctx?.output?.channel || ctx?._parentChannel || channel;
       target
         .send(
           `⛓️ **Zugriff verweigert**\n${redactSecrets(reason).clean}\n\n` +
@@ -514,7 +514,7 @@ function _buildSessionHooks(channelId, channel) {
       const ctx = sessions.get(channelId);
       if (ctx) ctx.awaitingQuestion = true;
 
-      const target = ctx?.output?.channel || channel;
+      const target = ctx?.output?.channel || ctx?._parentChannel || channel;
       await target.send(
         `👁️ **Nyx fragt~**\n${redactSecrets(question).clean}` +
           (choices ? `\nOptionen: ${choices.join(", ")}` : "")
@@ -657,6 +657,7 @@ async function _createSession(channelId, channel) {
     _pauseWarnedAt: null,
     _sessionRetried: false,
     _keepalivePing: false,
+    _parentChannel: channel,
   };
 
   sessions.set(channelId, ctx);
@@ -671,7 +672,7 @@ async function _createSession(channelId, channel) {
   restoreResponders(channelId);
 
   // Start keepalive timer to prevent SDK session expiry
-  _startKeepalive(channelId, channel);
+  _startKeepalive(channelId);
 
   return ctx;
 }
@@ -715,6 +716,7 @@ export async function enqueueTask(channelId, channel, prompt, outputChannel, use
   }
 
   const ctx = await getOrCreateSession(channelId, channel);
+  ctx._parentChannel = channel;
 
   if (ctx.queue.length >= MAX_QUEUE_SIZE) {
     throw new Error(`Queue voll (max ${MAX_QUEUE_SIZE} Tasks). Versuch's später~`);
@@ -729,14 +731,15 @@ export async function enqueueTask(channelId, channel, prompt, outputChannel, use
       userId: user?.id || null,
       userTag: user?.tag || null,
     });
-    processQueue(channelId, channel);
+    processQueue(channelId);
   });
 }
 
-async function processQueue(channelId, channel) {
+async function processQueue(channelId) {
   const ctx = sessions.get(channelId);
   if (!ctx || ctx.status === "working" || ctx.paused || ctx._changingModel || ctx._keepalivePing) return;
   if (ctx.queue.length === 0) return;
+  const channel = ctx._parentChannel;
 
   const { prompt, resolve, reject, outputChannel, userId } = ctx.queue.shift();
 
@@ -782,7 +785,7 @@ async function processQueue(channelId, channel) {
           botInfo: { botName, branch: ctx.branch, baseBranch: getEffectiveBranch(channelId), recentTasks },
           ..._buildSessionHooks(channelId, channel),
         });
-        _startKeepalive(channelId, channel);
+        _startKeepalive(channelId);
         log.info("Copilot session recreated, retrying task", { channelId });
         // Notify the channel so the user knows what happened
         if (_notifyChannel) {
@@ -842,7 +845,7 @@ async function processQueue(channelId, channel) {
     ctx._lastActivity = Date.now();
     // Continue queue unless paused (use setImmediate to avoid stack overflow)
     if (!ctx.paused) {
-      setImmediate(() => processQueue(channelId, channel));
+      setImmediate(() => processQueue(channelId));
     }
   }
 }
@@ -921,6 +924,18 @@ export async function hardStop(channelId, clearQueue = true) {
   const wasWorking = ctx.status === "working";
   let queueCleared = 0;
 
+  // Clear queue BEFORE any awaits to prevent processQueue's finally-kick
+  // from dequeuing a task during the output.finish() await
+  if (clearQueue && ctx.queue.length > 0) {
+    queueCleared = ctx.queue.length;
+    for (const item of ctx.queue) {
+      const err = new Error("Cleared by /stop");
+      err._reportedByOutput = true;
+      item.reject(err);
+    }
+    ctx.queue = [];
+  }
+
   // Capture channel before aborting — processQueue's finally will null ctx.output
   const backupChannel = ctx.output?.channel;
 
@@ -939,19 +954,7 @@ export async function hardStop(channelId, clearQueue = true) {
 
   // If keeping the queue, ensure processing continues
   if (!clearQueue && ctx.queue.length > 0 && wasWorking) {
-    setImmediate(() => {
-      if (backupChannel) processQueue(channelId, backupChannel);
-    });
-  }
-
-  if (clearQueue && ctx.queue.length > 0) {
-    queueCleared = ctx.queue.length;
-    for (const item of ctx.queue) {
-      const err = new Error("Cleared by /stop");
-      err._reportedByOutput = true;
-      item.reject(err);
-    }
-    ctx.queue = [];
+    setImmediate(() => processQueue(channelId));
   }
 
   return { found: true, wasWorking, queueCleared };
@@ -973,9 +976,10 @@ export function resumeSession(channelId, channel) {
   const wasPaused = ctx.paused;
   ctx.paused = false;
   ctx._pauseWarnedAt = null;
+  if (channel) ctx._parentChannel = channel;
   // Kick the queue in case items are waiting
   if (wasPaused && ctx.queue.length > 0) {
-    processQueue(channelId, channel);
+    processQueue(channelId);
   }
   return { found: true, wasPaused };
 }
@@ -1028,7 +1032,8 @@ export async function changeModel(channelId, channel, newModel) {
   try { ctx.copilotSession.destroy(); } catch {}
   _clearKeepalive(channelId);
   ctx.copilotSession = newSession;
-  _startKeepalive(channelId, channel);
+  if (channel) ctx._parentChannel = channel;
+  _startKeepalive(channelId);
 
   // Persist to DB
   updateSessionModel(channelId, newModel);
@@ -1036,7 +1041,7 @@ export async function changeModel(channelId, channel, newModel) {
 
   // Kick the queue in case tasks were enqueued during the model change
   if (ctx.queue.length > 0) {
-    processQueue(channelId, channel);
+    processQueue(channelId);
   }
 
   return { ok: true };
@@ -1079,14 +1084,16 @@ const _keepaliveTimers = new Map();
  * Start a keepalive timer for a channel's Copilot session.
  * Disabled when SESSION_KEEPALIVE_MS is 0.
  */
-function _startKeepalive(channelId, channel) {
+function _startKeepalive(channelId) {
   _clearKeepalive(channelId);
   if (!SESSION_KEEPALIVE_MS || SESSION_KEEPALIVE_MS <= 0) return;
 
   const timer = setInterval(async () => {
     const ctx = sessions.get(channelId);
     if (!ctx || ctx.status === "working" || ctx._changingModel) return;
+    const channel = ctx._parentChannel;
     ctx._keepalivePing = true;
+    const sessionAtStart = ctx.copilotSession;
     try {
       // Send a minimal prompt that produces no visible output
       await ctx.copilotSession.sendAndWait(
@@ -1103,6 +1110,12 @@ function _startKeepalive(channelId, channel) {
         if (!sessions.has(channelId)) {
           log.info("Keepalive aborted — session already destroyed", { channelId });
           _clearKeepalive(channelId);
+          return;
+        }
+        // Guard: if the copilot session was replaced (e.g. by /model set) during
+        // the keepalive ping, do NOT destroy the new session
+        if (ctx.copilotSession !== sessionAtStart) {
+          log.info("Keepalive aborted — session replaced during ping", { channelId });
           return;
         }
         try { ctx.copilotSession.destroy(); } catch {}
@@ -1137,7 +1150,7 @@ function _startKeepalive(channelId, channel) {
         ctx._keepalivePing = false;
         // Kick the queue in case tasks arrived during keepalive
         if (ctx.queue.length > 0 && ctx.status === "idle" && !ctx.paused) {
-          setImmediate(() => processQueue(channelId, channel));
+          setImmediate(() => processQueue(channelId));
         }
       }
     }
