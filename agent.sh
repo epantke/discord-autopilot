@@ -392,15 +392,19 @@ if [[ ! -d "$SRC_DIR" ]]; then
   fatal "Source directory not found: $SRC_DIR"
 fi
 
-mkdir -p "$APP/src"
+mkdir -p "$APP/src" "$APP/llm"
 cp "$SCRIPT_DIR/src/package.json" "$APP/package.json"
 [[ -f "$SCRIPT_DIR/src/package-lock.json" ]] && cp "$SCRIPT_DIR/src/package-lock.json" "$APP/package-lock.json"
 for f in "$SRC_DIR"/*.mjs; do
   cp "$f" "$APP/src/$(basename "$f")"
 done
+for f in "$SCRIPT_DIR/llm"/*.md; do
+  [[ -f "$f" ]] && cp "$f" "$APP/llm/$(basename "$f")"
+done
 
 FILE_COUNT=$(find "$APP/src" -name "*.mjs" | wc -l)
-ok "$FILE_COUNT source files copied"
+LLM_COUNT=$(find "$APP/llm" -name "*.md" 2>/dev/null | wc -l)
+ok "$FILE_COUNT source files + $LLM_COUNT llm files copied"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 6) Install dependencies

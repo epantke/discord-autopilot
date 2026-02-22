@@ -905,7 +905,14 @@ if (Test-Path $lockSrc) {
 }
 # Copy all source files
 $sourceFiles = Get-ChildItem $SrcDir -Filter '*.mjs' | Sort-Object Name
-$totalFiles = $sourceFiles.Count + 1   # +1 for package.json
+
+# Copy llm/ persona files
+$LlmSrc = Join-Path $ScriptDir 'llm'
+$AppLlm = Join-Path $App 'llm'
+if (-not (Test-Path $AppLlm)) { New-Item -ItemType Directory -Path $AppLlm -Force | Out-Null }
+$llmFiles = if (Test-Path $LlmSrc) { Get-ChildItem $LlmSrc -Filter '*.md' | Sort-Object Name } else { @() }
+
+$totalFiles = $sourceFiles.Count + $llmFiles.Count + 1   # +1 for package.json
 Write-FileProgress 'package.json' 1 $totalFiles
 $i = 1
 foreach ($file in $sourceFiles) {
@@ -913,8 +920,13 @@ foreach ($file in $sourceFiles) {
     Copy-Utf8File $file.FullName (Join-Path $AppSrc $file.Name)
     Write-FileProgress $file.Name $i $totalFiles
 }
+foreach ($file in $llmFiles) {
+    $i++
+    Copy-Utf8File $file.FullName (Join-Path $AppLlm $file.Name)
+    Write-FileProgress $file.Name $i $totalFiles
+}
 
-Write-Ok "$totalFiles source files copied"
+Write-Ok "$totalFiles files copied ($($sourceFiles.Count) source + $($llmFiles.Count) llm)"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 7) Install dependencies
