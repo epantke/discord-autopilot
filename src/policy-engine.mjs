@@ -142,10 +142,10 @@ function isGitPushCommand(command) {
   // Detect env-variable prefix pattern: VAR=val git push
   if (/\b\w+=\S+\s+git\s+push\b/i.test(command)) return true;
   // Detect git config alias that references push-related commands (bypass via alias)
-  if (/\bgit\s+config\s+(?:[\w.-]+\s+)*alias\.\w+\s+.*?\b(?:push|pr\s+create|pr\s+merge)\b/i.test(command)) return true;
+  if (/\bgit\s+config\b[^;&|\n]*\balias\.\w+\s.*?\b(?:push|pr\s+create|pr\s+merge)\b/i.test(command)) return true;
   // Detect git with dynamic subcommand via variable/command expansion (can't verify statically)
-  if (/\bgit\s+(?:(?:-[\w-]+(?:=\S+|\s+\S+)?)\s+)*\$[\w{(]/i.test(command)) return true;
-  if (/\bgit\s+(?:(?:-[\w-]+(?:=\S+|\s+\S+)?)\s+)*`/i.test(command)) return true;
+  if (/\bgit\b[^;&|\n]*\$[\w{(]/i.test(command)) return true;
+  if (/\bgit\b[^;&|\n]*`/i.test(command)) return true;
   return parts.some((part) =>
     GIT_PUSH_PATTERNS.some((re) => re.test(part))
   );
