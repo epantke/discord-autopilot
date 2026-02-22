@@ -312,9 +312,12 @@ function isRateLimited(interaction) {
 /**
  * Lightweight rate-limiter for messageCreate follow-ups (DMs + threads).
  * Reuses the same window/max as slash commands.
+ * @param {string} userId
+ * @param {import("discord.js").GuildMember|null} [member] - Guild member (for role-based admin bypass)
  */
-function isDmRateLimited(userId) {
+function isDmRateLimited(userId, member) {
   if (ADMIN_USER_ID && userId === ADMIN_USER_ID) return false;
+  if (ADMIN_ROLE_IDS && member && hasAnyRole(member, ADMIN_ROLE_IDS)) return false;
   const now = Date.now();
   let timestamps = rateLimitMap.get(userId);
   if (!timestamps) {
@@ -857,8 +860,12 @@ function startUpdateChecker() {
 // ── Interaction Handler ─────────────────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
-  // Model name autocomplete
+  // Model name autocomplete — enforce access control before responding
   if (interaction.isAutocomplete()) {
+    if (!isAllowed(interaction) || !isAdmin(interaction)) {
+      await interaction.respond([]).catch(() => {});
+      return;
+    }
     if (interaction.commandName === "model") {
       const focused = interaction.options.getFocused();
       try {
@@ -1204,6 +1211,12 @@ client.on("interactionCreate", async (interaction) => {
 
         if (action === "apply") {
           await interaction.deferReply();
+
+          if (_autoUpdateInProgress) {
+            await interaction.editReply("🔄 Ein Auto-Update läuft bereits — bitte warten~");
+            break;
+          }
+
           const check = await checkForUpdate({ force: true });
 
           if (!check.available) {
@@ -1399,8 +1412,8 @@ client.on("messageCreate", async (message) => {
 
     const dmChannelId = message.channel.id;
 
-    // If the agent is waiting for a question answer, don't enqueue as new task
-    if (isAwaitingQuestion(dmChannelId)) return;
+    // If the agent is waitin (DMs have no member/roles)
+    if (isDmRateLimited(userId, nullhannelId)) return;
 
     const prompt = message.content.trim();
     if (!prompt) return;
@@ -1430,7 +1443,7 @@ client.on("messageCreate", async (message) => {
     if (ALLOWED_CHANNELS && !ALLOWED_CHANNELS.has(message.channel.id)) return;
     if (ADMIN_ROLE_IDS && !(ADMIN_USER_ID && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
 
-    // Strip the bot mention from the prompt
+    // Strip the bot mention from the pro, message.membermpt
     const prompt = message.content
       .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
       .trim();
@@ -1480,7 +1493,7 @@ client.on("messageCreate", async (message) => {
   // If the agent is waiting for a question answer, don't enqueue as follow-up
   if (isAwaitingQuestion(parentId)) return;
 
-  if (ADMIN_ROLE_IDS && !(ADMIN_USER_ID && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
+  if (ADMIN_ROLE_IDS && !(ADMIN_USER_ID, message.member && message.author.id === ADMIN_USER_ID) && !hasAnyRole(message.member, ADMIN_ROLE_IDS)) return;
 
   const prompt = message.content.trim();
   if (!prompt) return;

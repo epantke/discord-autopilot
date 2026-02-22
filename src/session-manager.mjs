@@ -188,15 +188,10 @@ async function _cloneRepoInner(cloneUrl, projectName) {
     }
   }
 
-  // Use GIT_ASKPASS to inject credentials without exposing them in process arguments
+  // Inject credentials via git config header — avoids URL manipulation entirely
   const cloneEnv = {};
   if (GITHUB_TOKEN) {
-    // GIT_ASKPASS script echoes the token when git asks for a password
-    cloneEnv.GIT_ASKPASS = process.execPath;
     cloneEnv.GIT_TERMINAL_PROMPT = "0";
-    // Node.js -e script that prints the token to stdout
-    cloneEnv.GIT_ASKPASS_SCRIPT = GITHUB_TOKEN;
-    // Use a header-based approach instead: avoids URL manipulation entirely
     cloneEnv.GIT_CONFIG_COUNT = "1";
     cloneEnv.GIT_CONFIG_KEY_0 = "http.https://github.com/.extraheader";
     cloneEnv.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${GITHUB_TOKEN}`).toString("base64")}`;
@@ -832,6 +827,7 @@ export async function resetSession(channelId) {
   if (ctx) {
     worktreePath = ctx.workspacePath;
     ctx._aborted = true;
+    await ctx.output?.finish("🔮 **Session zurückgesetzt~**");
     try { ctx.copilotSession.abort(); } catch {}
     try { ctx.copilotSession.destroy(); } catch {}
     for (const item of ctx.queue) {
@@ -878,6 +874,15 @@ export async function hardStop(channelId, clearQueue = true) {
     await ctx.output?.finish("💀 **Abgebrochen.**");
     ctx.status = "idle";
     updateSessionStatus(channelId, "idle");
+  }
+
+  // If keeping the queue, ensure processing continues after we set status to idle
+  if (!clearQueue && ctx.queue.length > 0 && wasWorking) {
+    setImmediate(() => {
+      // channel is needed — try to resolve from the output or the session context
+      const target = ctx.output?.channel;
+      if (target) processQueue(channelId, target);
+    });
   }
 
   if (clearQueue && ctx.queue.length > 0) {
@@ -1004,13 +1009,15 @@ const IDLE_SWEEP_MS = 24 * 60 * 60_000; // 24 hours
  * Fully destroy a session: Copilot session, grants, responders, overrides, DB, worktree.
  * Used by both the idle sweep and the paused-session grace-period timeout.
  */
-function _destroySession(channelId) {
+async function _destroySession(channelId) {
   const ctx = sessions.get(channelId);
   if (!ctx) return;
   const worktreePath = ctx.workspacePath;
   // Resolve repo path BEFORE deleting overrides so we prune the correct repo
   let repoPath;
   try { repoPath = getEffectiveRepo(channelId).repoPath; } catch {}
+  // Finish any active output before tearing down
+  try { await ctx.output?.finish("🖤 **Session geschlossen (Inaktivität)~**"); } catch {}
   // Reject any queued tasks
   for (const item of ctx.queue) {
     try {
@@ -1019,16 +1026,16 @@ function _destroySession(channelId) {
       item.reject(err);
     } catch {}
   }
+  try { cancelPushApproval(channelId); } catch {}
   try { ctx.copilotSession.destroy(); } catch {}
   revokeAllGrants(channelId);
   responderStore.delete(channelId);
-  repoOverrides.delete(channelId);
-  branchOverrides.delete(channelId);
   sessions.delete(channelId);
   try { dbDeleteSession(channelId); } catch {}
   try { deleteRespondersByChannel(channelId); } catch {}
-  try { deleteRepoOverride(channelId); } catch {}
-  try { dbDeleteBranchOverride(channelId); } catch {}
+  // NOTE: repo/branch overrides are intentionally NOT deleted here.
+  // They are admin-configured per-channel and should persist beyond session lifecycle.
+  // Only explicit /repo reset or /branch reset clears them.
   if (worktreePath) {
     removeWorktree(worktreePath, repoPath).catch(() => {});
   }

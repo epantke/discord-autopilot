@@ -114,8 +114,8 @@ function extractSubCommands(command) {
     let remaining = part;
     let depth = 0;
     let start = -1;
-    for (let i = 0; i < remaining.length - 1; i++) {
-      if (remaining[i] === "$" && remaining[i + 1] === "(") {
+    for (let i = 0; i < remaining.length; i++) {
+      if (i + 1 < remaining.length && remaining[i] === "$" && remaining[i + 1] === "(") {
         if (depth === 0) start = i + 2;
         depth++;
         i++; // skip '('
