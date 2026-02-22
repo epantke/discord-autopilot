@@ -27,6 +27,8 @@ try {
     for (const suffix of ["-wal", "-shm"]) {
       try { unlinkSync(STATE_DB_PATH + suffix); } catch { /* may not exist */ }
     }
+    // Remove the corrupt DB so the retry creates a fresh one
+    try { unlinkSync(STATE_DB_PATH); } catch { /* best effort */ }
   }
   try {
     db = new Database(STATE_DB_PATH);

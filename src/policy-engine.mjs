@@ -52,16 +52,64 @@ const DANGEROUS_WRAPPERS = /\b(?:eval|source)\s/i;
 
 // Split compound commands (&&, ||, ;, |, newline) and also unwrap
 // sh -c / bash -c wrappers to detect push in any sub-part.
-const COMPOUND_SPLIT = /\s*(?:&&|\|\||[;|\n])\s*/;
 const SUBSHELL_WRAPPER = /^\s*(?:sh|bash|zsh|dash)\s+-c\s+['"](.+)['"]\s*$/i;
 
+/**
+ * Split a command on compound operators (&&, ||, ;, |, newline)
+ * while respecting single- and double-quoted strings.
+ */
+function splitCompound(command) {
+  const results = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+
+    if (ch === "\\" && !inSingle && i + 1 < command.length) {
+      current += ch + command[i + 1];
+      i++;
+      continue;
+    }
+
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; current += ch; continue; }
+    if (ch === '"' && !inSingle) { inDouble = !inDouble; current += ch; continue; }
+
+    if (inSingle || inDouble) { current += ch; continue; }
+
+    if (ch === "&" && command[i + 1] === "&") {
+      if (current.trim()) results.push(current.trim());
+      current = "";
+      i++;
+      continue;
+    }
+    if (ch === "|" && command[i + 1] === "|") {
+      if (current.trim()) results.push(current.trim());
+      current = "";
+      i++;
+      continue;
+    }
+    if (ch === ";" || ch === "|" || ch === "\n") {
+      if (current.trim()) results.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += ch;
+  }
+
+  if (current.trim()) results.push(current.trim());
+  return results;
+}
+
 function extractSubCommands(command) {
-  const parts = command.split(COMPOUND_SPLIT).filter(Boolean);
+  const parts = splitCompound(command);
   const result = [];
   for (const part of parts) {
     result.push(part);
     const m = SUBSHELL_WRAPPER.exec(part);
-    if (m) result.push(...m[1].split(COMPOUND_SPLIT).filter(Boolean));
+    if (m) result.push(...splitCompound(m[1]));
     // Recursively extract from $(...) command substitutions (handles nesting)
     let remaining = part;
     let depth = 0;
@@ -75,14 +123,14 @@ function extractSubCommands(command) {
         depth--;
         if (depth === 0 && start >= 0) {
           const inner = remaining.slice(start, i);
-          result.push(...inner.split(COMPOUND_SPLIT).filter(Boolean));
+          result.push(...splitCompound(inner));
           start = -1;
         }
       }
     }
     // Also extract from backtick substitutions
     const backtick = part.matchAll(/`([^`]+)`/g);
-    for (const b of backtick) result.push(...b[1].split(COMPOUND_SPLIT).filter(Boolean));
+    for (const b of backtick) result.push(...splitCompound(b[1]));
   }
   return result;
 }
@@ -203,7 +251,7 @@ export function evaluateToolUse(toolName, toolArgs, workspaceRoot, grants) {
     }
 
     // Scan for ALL cd's into paths outside workspace
-    for (const cdMatch of cmd.matchAll(/\b(?:cd|pushd)\s+(?:--\s+)?(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g)) {
+    for (const cdMatch of cmd.matchAll(/\b(?:cd|pushd)\s+(?:-[A-Za-z]+\s+)*(?:--\s+)?(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g)) {
       const rawTarget = cdMatch[1] || cdMatch[2] || cdMatch[3];
       // Block cd - / pushd - — shell navigates to previous directory which may be outside workspace
       if (rawTarget === "-") {

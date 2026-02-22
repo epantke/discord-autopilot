@@ -881,7 +881,7 @@ if ($cfgBranch) {
     Write-Ok "DEFAULT_BRANCH: $cfgBranch"
 } else {
     $rawBranches = git -C $RepoDir branch -r 2>&1 | Out-String
-    $branches = ($rawBranches -split "`n") | ForEach-Object { $_.Trim(' ', '*') } | Where-Object { $_ -and $_ -notmatch '->' } | ForEach-Object { $_ -replace '^origin/', '' } | Sort-Object -Unique
+    $branches = ($rawBranches -split "\r?\n") | ForEach-Object { $_.Trim() -replace '^\*\s*', '' } | Where-Object { $_ -and $_ -notmatch '->' } | ForEach-Object { $_ -replace '^origin/', '' } | Sort-Object -Unique
     if ($branches -and $branches.Count -gt 1) {
         Write-Host ''
         Write-Host '  ' -NoNewline

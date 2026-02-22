@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, existsSync, rmSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { WORKSPACES_ROOT, REPOS_ROOT, PROJECT_NAME, REPO_PATH, GITHUB_TOKEN, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, DEFAULT_MODEL, AUTO_APPROVE_PUSH, DEFAULT_BRANCH } from "./config.mjs";
+import { WORKSPACES_ROOT, REPOS_ROOT, PROJECT_NAME, REPO_PATH, GITHUB_TOKEN, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, ALLOWED_DM_USERS, DEFAULT_MODEL, AUTO_APPROVE_PUSH, DEFAULT_BRANCH, PAUSE_GRACE_MS } from "./config.mjs";
 import {
   upsertSession,
   getSession,
@@ -38,6 +38,17 @@ import { createLogger } from "./logger.mjs";
 
 const execFileAsync = promisify(execFile);
 const log = createLogger("session");
+
+/** Callback for sending notifications to a Discord channel. Set by bot.mjs at startup. */
+let _notifyChannel = null;
+
+/**
+ * Register a callback for sending notifications to Discord channels.
+ * @param {(channelId: string, message: string) => Promise<void>} fn
+ */
+export function setNotifyCallback(fn) {
+  _notifyChannel = fn;
+}
 
 /**
  * Remove a worktree directory and prune stale git registrations.
@@ -112,7 +123,8 @@ function getEffectiveRepo(channelId) {
  * null means "use HEAD" (the remote default).
  */
 function getEffectiveBranch(channelId) {
-  return branchOverrides.get(channelId) || DEFAULT_BRANCH || null;
+  const branch = branchOverrides.get(channelId) || DEFAULT_BRANCH || null;
+  return branch?.trim() || null;
 }
 
 /**
@@ -176,20 +188,24 @@ async function _cloneRepoInner(cloneUrl, projectName) {
     }
   }
 
-  // Inject GITHUB_TOKEN into URL for auth
-  let authUrl = cloneUrl;
+  // Use GIT_ASKPASS to inject credentials without exposing them in process arguments
+  const cloneEnv = {};
   if (GITHUB_TOKEN) {
-    authUrl = cloneUrl.replace("https://github.com/", `https://x-access-token:${GITHUB_TOKEN}@github.com/`);
+    // GIT_ASKPASS script echoes the token when git asks for a password
+    cloneEnv.GIT_ASKPASS = process.execPath;
+    cloneEnv.GIT_TERMINAL_PROMPT = "0";
+    // Node.js -e script that prints the token to stdout
+    cloneEnv.GIT_ASKPASS_SCRIPT = GITHUB_TOKEN;
+    // Use a header-based approach instead: avoids URL manipulation entirely
+    cloneEnv.GIT_CONFIG_COUNT = "1";
+    cloneEnv.GIT_CONFIG_KEY_0 = "http.https://github.com/.extraheader";
+    cloneEnv.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${GITHUB_TOKEN}`).toString("base64")}`;
   }
 
-  await execFileAsync("git", ["clone", authUrl, repoPath], { timeout: 120_000 });
-
-  // Strip auth token from persisted remote URL to avoid leaking it on disk
-  if (authUrl !== cloneUrl) {
-    try {
-      await execFileAsync("git", ["-C", repoPath, "remote", "set-url", "origin", cloneUrl], { timeout: 5_000 });
-    } catch { /* best effort — clone succeeded, remote URL is cosmetic */ }
-  }
+  await execFileAsync("git", ["clone", cloneUrl, repoPath], {
+    timeout: 120_000,
+    env: { ...process.env, ...cloneEnv },
+  });
 
   log.info("Repo cloned", { projectName, repoPath });
   return repoPath;
@@ -271,6 +287,7 @@ export async function clearChannelRepo(channelId) {
  * @returns {{ ok: boolean, error?: string }}
  */
 export async function setChannelBranch(channelId, branch) {
+  branch = branch.trim();
   const { repoPath } = getEffectiveRepo(channelId);
 
   // Fetch and validate the branch exists on the remote
@@ -483,9 +500,13 @@ function _buildSessionHooks(channelId, channel) {
       if (!sessions.has(channelId)) return;
       const ctx = sessions.get(channelId);
       if (ctx) {
-        ctx.output?.finish("🖤 **Fertig~**");
-        ctx.status = "idle";
-        updateSessionStatus(channelId, "idle");
+        // Guard against stale onIdle from a previous task finishing the current task's output
+        const gen = ctx._taskGen;
+        ctx.output?.finish("🖤 **Fertig~**").catch(() => {});
+        if (ctx._taskGen === gen) {
+          ctx.status = "idle";
+          updateSessionStatus(channelId, "idle");
+        }
       }
     },
 
@@ -506,6 +527,11 @@ function _buildSessionHooks(channelId, channel) {
           filter: (m) => {
             if (m.author.bot) return false;
             if (ADMIN_USER_ID && m.author.id === ADMIN_USER_ID) return true;
+            // DMs have no guild context (m.member is null) — check DM allowlist
+            if (!m.guild) {
+              if (ALLOWED_DM_USERS && ALLOWED_DM_USERS.has(m.author.id)) return true;
+              return false;
+            }
             if (ADMIN_ROLE_IDS && m.member?.roles?.cache) {
               if ([...ADMIN_ROLE_IDS].some((id) => m.member.roles.cache.has(id))) return true;
             }
@@ -606,7 +632,7 @@ async function _createSession(channelId, channel) {
         throw err;
       }
       log.warn("Session creation failed, retrying", { channelId, error: err.message });
-      await new Promise((r) => setTimeout(r, 2_000));
+      await new Promise((r) => { const t = setTimeout(r, 2_000); t.unref(); });
     }
   }
 
@@ -628,6 +654,7 @@ async function _createSession(channelId, channel) {
     _lastActivity: Date.now(),
     _taskGen: 0,
     _changingModel: false,
+    _pauseWarnedAt: null,
   };
 
   sessions.set(channelId, ctx);
@@ -740,17 +767,12 @@ async function processQueue(channelId, channel) {
     if (ctx._aborted) {
       ctx._aborted = false;
     } else if (err.message?.includes("Timeout") && err.message?.includes("session.idle")) {
-      // Guard: if /stop already handled this task, skip duplicate cleanup
-      if (!ctx._aborted) {
-        log.warn("Task timed out", { channelId, taskId: ctx.taskId, timeoutMs: TASK_TIMEOUT_MS });
-        try { ctx.copilotSession.abort(); } catch {}
-        if (ctx.taskId) completeTask(ctx.taskId, "aborted");
-        await ctx.output?.finish(`🌑 **Timeout** nach ${Math.round(TASK_TIMEOUT_MS / 60_000)} min~`);
-        ctx.status = "idle";
-        updateSessionStatus(channelId, "idle");
-      } else {
-        ctx._aborted = false;
-      }
+      log.warn("Task timed out", { channelId, taskId: ctx.taskId, timeoutMs: TASK_TIMEOUT_MS });
+      try { ctx.copilotSession.abort(); } catch {}
+      if (ctx.taskId) completeTask(ctx.taskId, "aborted");
+      await ctx.output?.finish(`🌑 **Timeout** nach ${Math.round(TASK_TIMEOUT_MS / 60_000)} min~`);
+      ctx.status = "idle";
+      updateSessionStatus(channelId, "idle");
     } else {
       if (ctx.taskId) completeTask(ctx.taskId, "failed");
       ctx.status = "idle";
@@ -886,6 +908,7 @@ export function resumeSession(channelId, channel) {
   if (!ctx) return { found: false };
   const wasPaused = ctx.paused;
   ctx.paused = false;
+  ctx._pauseWarnedAt = null;
   // Kick the queue in case items are waiting
   if (wasPaused && ctx.queue.length > 0) {
     processQueue(channelId, channel);
@@ -903,7 +926,7 @@ export function resumeSession(channelId, channel) {
  */
 export async function changeModel(channelId, channel, newModel) {
   const ctx = sessions.get(channelId);
-  if (!ctx) return { ok: false, error: "Keine aktive Session~" };
+  if (!ctx) return { ok: false, error: "Keine aktive Session — sende zuerst einen Task, dann `/model action:set`~" };
   if (ctx.status === "working") {
     return { ok: false, error: "Kann nicht wechseln während ein Task läuft. Erst `/stop`~" };
   }
@@ -976,27 +999,89 @@ export function hasWorkingSessions() {
 // ── Idle Session Sweep & Task Pruning ───────────────────────────────────────
 
 const IDLE_SWEEP_MS = 24 * 60 * 60_000; // 24 hours
+
+/**
+ * Fully destroy a session: Copilot session, grants, responders, overrides, DB, worktree.
+ * Used by both the idle sweep and the paused-session grace-period timeout.
+ */
+function _destroySession(channelId) {
+  const ctx = sessions.get(channelId);
+  if (!ctx) return;
+  const worktreePath = ctx.workspacePath;
+  // Resolve repo path BEFORE deleting overrides so we prune the correct repo
+  let repoPath;
+  try { repoPath = getEffectiveRepo(channelId).repoPath; } catch {}
+  // Reject any queued tasks
+  for (const item of ctx.queue) {
+    try {
+      const err = new Error("Session wegen Inaktivität geschlossen");
+      err._reportedByOutput = true;
+      item.reject(err);
+    } catch {}
+  }
+  try { ctx.copilotSession.destroy(); } catch {}
+  revokeAllGrants(channelId);
+  responderStore.delete(channelId);
+  repoOverrides.delete(channelId);
+  branchOverrides.delete(channelId);
+  sessions.delete(channelId);
+  try { dbDeleteSession(channelId); } catch {}
+  try { deleteRespondersByChannel(channelId); } catch {}
+  try { deleteRepoOverride(channelId); } catch {}
+  try { dbDeleteBranchOverride(channelId); } catch {}
+  if (worktreePath) {
+    removeWorktree(worktreePath, repoPath).catch(() => {});
+  }
+}
+
+/**
+ * Called after the pause grace period expires.
+ * If the session is still paused and warned, destroy it.
+ */
+function _sweepPausedSession(channelId) {
+  const ctx = sessions.get(channelId);
+  if (!ctx) return;
+  // Session was resumed (or reset) during the grace period — abort
+  if (!ctx.paused || !ctx._pauseWarnedAt) return;
+  _destroySession(channelId);
+  if (_notifyChannel) {
+    _notifyChannel(
+      channelId,
+      "🖤 **Session geschlossen** — pausiert ohne Reaktion. " +
+      "Schreib eine neue Nachricht um eine frische Session zu starten~"
+    ).catch(() => {});
+  }
+  log.info("Paused session swept after grace period", { channelId });
+}
+
 const _idleSweep = setInterval(() => {
   const now = Date.now();
   for (const [channelId, ctx] of sessions) {
     if (ctx.status !== "idle") continue;
-    if (ctx.queue.length > 0) continue;
-    // Track last activity — fall back to creation time
     const idle = now - (ctx._lastActivity || 0);
-    if (idle >= IDLE_SWEEP_MS) {
-      const worktreePath = ctx.workspacePath;
-      try { ctx.copilotSession.destroy(); } catch {}
-      revokeAllGrants(channelId);
-      responderStore.delete(channelId);
-      sessions.delete(channelId);
-      try { dbDeleteSession(channelId); } catch {}
-      try { deleteRespondersByChannel(channelId); } catch {}
-      // Clean up worktree from disk
-      if (worktreePath) {
-        let repoPath;
-        try { repoPath = getEffectiveRepo(channelId).repoPath; } catch {}
-        removeWorktree(worktreePath, repoPath).catch(() => {});
+
+    // Paused sessions with queued tasks: warn + grace period instead of skipping forever
+    if (ctx.paused && ctx.queue.length > 0) {
+      if (idle >= IDLE_SWEEP_MS && !ctx._pauseWarnedAt) {
+        ctx._pauseWarnedAt = now;
+        if (_notifyChannel) {
+          _notifyChannel(
+            channelId,
+            `⚠️ **Session seit 24h pausiert** mit ${ctx.queue.length} wartenden Task(s).\n` +
+            `Nutze \`/resume\` innerhalb der nächsten **${Math.round(PAUSE_GRACE_MS / 60_000)} Minuten**, ` +
+            `sonst wird die Session geschlossen~`
+          ).catch(() => {});
+        }
+        const timer = setTimeout(() => _sweepPausedSession(channelId), PAUSE_GRACE_MS);
+        timer.unref();
+        log.info("Paused session warning sent", { channelId, gracePeriodMs: PAUSE_GRACE_MS });
       }
+      continue;
+    }
+
+    if (ctx.queue.length > 0) continue;
+    if (idle >= IDLE_SWEEP_MS) {
+      _destroySession(channelId);
       log.info("Idle session swept", { channelId });
     }
   }

@@ -1,5 +1,5 @@
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
-const LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.toLowerCase()] ?? LOG_LEVELS.info;
+const LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.trim().toLowerCase()] ?? LOG_LEVELS.info;
 
 function emit(level, component, message, data) {
   if (LOG_LEVELS[level] < LEVEL) return;

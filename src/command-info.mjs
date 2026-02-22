@@ -4,8 +4,10 @@ import { fileURLToPath } from "node:url";
 import { CURRENT_VERSION, PROJECT_NAME } from "./config.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const IDENTITY_PROMPT = readFileSync(join(__dirname, "..", "llm", "IDENTITY.md"), "utf-8");
-const SOUL_PROMPT = readFileSync(join(__dirname, "..", "llm", "SOUL.md"), "utf-8");
+let IDENTITY_PROMPT = "";
+let SOUL_PROMPT = "";
+try { IDENTITY_PROMPT = readFileSync(join(__dirname, "..", "llm", "IDENTITY.md"), "utf-8"); } catch { /* may be missing outside standalone build */ }
+try { SOUL_PROMPT = readFileSync(join(__dirname, "..", "llm", "SOUL.md"), "utf-8"); } catch { /* may be missing outside standalone build */ }
 
 /**
  * Build a self-awareness system prompt section describing the bot's capabilities,
