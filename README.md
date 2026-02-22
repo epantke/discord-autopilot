@@ -54,27 +54,19 @@ Send a DM or @mention in Discord — the agent edits files, runs tests, commits,
 <tr><td>
 
 ```bash
-export DISCORD_TOKEN="your-token"
-chmod +x agent.sh
-./agent.sh          # prompts for repo URL
+curl -fsSL https://github.com/epantke/discord-autopilot/releases/latest/download/agent.sh -o agent.sh && bash agent.sh
 ```
 
 </td><td>
 
 ```powershell
-.\agent.ps1         # interactive setup wizard
-                    # validates tokens, clones repo, starts bot
+irm https://github.com/epantke/discord-autopilot/releases/latest/download/agent.ps1 -OutFile agent.ps1; .\agent.ps1
 ```
 
 </td></tr>
 </table>
 
-Or create a `.env` file:
-
-```env
-DISCORD_TOKEN=your-bot-token
-REPO_URL=https://github.com/user/repo.git
-```
+Both scripts include an interactive setup wizard — just paste and run, the script guides you through everything.
 
 ## Discord Bot Setup
 

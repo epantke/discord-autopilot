@@ -117,14 +117,6 @@ if [[ "$SCRIPT_VERSION" != "0.0.0-dev" ]] && command -v curl >/dev/null 2>&1 && 
   fi
 fi
 
-if [[ -n "${REPO_URL:-}" ]]; then
-  info "Using REPO_URL from environment: $REPO_URL"
-else
-  read -rp "Repo URL? " REPO_URL
-fi
-
-[[ -z "$REPO_URL" ]] && die "No repo URL provided."
-
 # ──────────────────────────────────────────────────────────────────────────────
 # 2) Prerequisite checks
 # ──────────────────────────────────────────────────────────────────────────────
@@ -164,12 +156,162 @@ if [[ -n "$COPILOT_CMD" ]]; then
   fi
 fi
 
-# ENV check
+# ──────────────────────────────────────────────────────────────────────────────
+# Setup Wizard — interactive prompts for missing config
+# ──────────────────────────────────────────────────────────────────────────────
+ENV_CHANGED=false
+ENV_FILE="$SCRIPT_DIR/.env"
+
+# ── DISCORD_TOKEN ──
 if [[ -z "${DISCORD_TOKEN:-}" ]]; then
+  if [[ ! -t 0 ]]; then
+    die "DISCORD_TOKEN is not set and stdin is not a terminal (non-interactive).\n\n  export DISCORD_TOKEN=\"your-bot-token-here\"\n  Or create a .env file next to this script."
+  fi
   echo ""
-  die "DISCORD_TOKEN is not set.\n\n  export DISCORD_TOKEN=\"your-bot-token-here\"\n\n  Create a bot at https://discord.com/developers/applications\n  → Bot → Reset Token → copy it.\n\n  Required bot permissions: Send Messages, Embed Links, Attach Files, Use Slash Commands\n  Required intents: Message Content"
+  echo -e "  ${CYAN} DISCORD_TOKEN ${NC} (required)"
+  echo ""
+  echo -e "  How to get your token:"
+  echo -e "    1. Go to ${CYAN}https://discord.com/developers/applications${NC}"
+  echo -e "    2. Click ${NC}New Application${NC} (or select existing)"
+  echo -e "    3. Go to Bot tab → Reset Token → copy it"
+  echo -e "    4. Under ${NC}Privileged Gateway Intents${NC}: enable ${YELLOW}Message Content${NC}"
+  echo -e "    5. Under ${NC}OAuth2 > URL Generator${NC}:"
+  echo -e "       Scopes: bot, applications.commands"
+  echo -e "       Permissions: Send Messages, Embed Links, Attach Files, Use Slash Commands"
+  echo ""
+  read -rp "  ▸ Paste your Discord bot token: " DISCORD_TOKEN
+  [[ -z "$DISCORD_TOKEN" ]] && die "DISCORD_TOKEN is required."
+  export DISCORD_TOKEN
+  ENV_CHANGED=true
+  ok "DISCORD_TOKEN set"
+else
+  ok "DISCORD_TOKEN found"
 fi
-ok "DISCORD_TOKEN is set"
+
+# ── REPO_URL ──
+if [[ -z "${REPO_URL:-}" ]]; then
+  if [[ ! -t 0 ]]; then
+    die "REPO_URL is not set and stdin is not a terminal (non-interactive)."
+  fi
+  echo ""
+  echo -e "  ${CYAN} REPO_URL ${NC} (required)"
+  echo ""
+  echo -e "  The Git repository the agent will work on."
+  echo -e "  HTTPS example: ${CYAN}https://github.com/owner/repo.git${NC}"
+  echo -e "  SSH example:   ${CYAN}git@github.com:owner/repo.git${NC}"
+  echo ""
+  read -rp "  ▸ Repository URL: " REPO_URL
+  [[ -z "$REPO_URL" ]] && die "REPO_URL is required."
+  export REPO_URL
+  ENV_CHANGED=true
+  ok "REPO_URL set"
+else
+  ok "REPO_URL: $REPO_URL"
+fi
+
+# ── GITHUB_TOKEN (optional) ──
+if [[ -z "${GITHUB_TOKEN:-}" ]] && [[ -t 0 ]]; then
+  echo ""
+  echo -e "  ${NC} GITHUB_TOKEN ${NC} (optional)"
+  echo ""
+  echo -e "  Needed for private repos, pushing, and creating PRs."
+  echo -e "  Create a fine-grained PAT: ${CYAN}https://github.com/settings/personal-access-tokens/new${NC}"
+  echo -e "  Required permissions: ${NC}Contents (read/write)${NC}, ${NC}Pull requests (read/write)${NC}"
+  echo -e "  Press ${YELLOW}Enter${NC} to skip."
+  echo ""
+  read -rp "  ▸ GitHub token (or Enter to skip): " _gh_token
+  if [[ -n "$_gh_token" ]]; then
+    export GITHUB_TOKEN="$_gh_token"
+    ENV_CHANGED=true
+    ok "GITHUB_TOKEN set"
+  else
+    info "GITHUB_TOKEN skipped"
+  fi
+fi
+
+# ── ADMIN_USER_ID (optional) ──
+if [[ -z "${ADMIN_USER_ID:-}" ]] && [[ -t 0 ]]; then
+  echo ""
+  echo -e "  ${NC} ADMIN_USER_ID ${NC} (optional)"
+  echo ""
+  echo -e "  Your Discord User ID — allows DMs and admin access."
+  echo -e "  How to find it:"
+  echo -e "    1. Discord → User Settings (gear) → Advanced → enable ${YELLOW}Developer Mode${NC}"
+  echo -e "    2. My Account → click ${NC}...${NC} next to your username → ${NC}Copy User ID${NC}"
+  echo -e "  Press ${YELLOW}Enter${NC} to skip."
+  echo ""
+  read -rp "  ▸ Admin User ID (or Enter to skip): " _admin_id
+  if [[ -n "$_admin_id" ]]; then
+    if [[ "$_admin_id" =~ ^[0-9]{17,20}$ ]]; then
+      export ADMIN_USER_ID="$_admin_id"
+      ENV_CHANGED=true
+      ok "ADMIN_USER_ID set"
+    else
+      warn "'$_admin_id' is not a valid Discord User ID (must be 17-20 digits). Skipping."
+    fi
+  else
+    info "ADMIN_USER_ID skipped"
+  fi
+fi
+
+# ── STARTUP_CHANNEL_ID (optional) ──
+if [[ -z "${STARTUP_CHANNEL_ID:-}" ]] && [[ -t 0 ]]; then
+  echo ""
+  echo -e "  ${NC} STARTUP_CHANNEL_ID ${NC} (optional)"
+  echo ""
+  echo -e "  Channel for bot online/offline notifications."
+  echo -e "  Right-click any text channel → ${NC}Copy Channel ID${NC}"
+  echo -e "  Press ${YELLOW}Enter${NC} to skip."
+  echo ""
+  read -rp "  ▸ Startup Channel ID (or Enter to skip): " _startup_ch
+  if [[ -n "$_startup_ch" ]]; then
+    if [[ "$_startup_ch" =~ ^[0-9]{17,20}$ ]]; then
+      export STARTUP_CHANNEL_ID="$_startup_ch"
+      ENV_CHANGED=true
+      ok "STARTUP_CHANNEL_ID set"
+    else
+      warn "'$_startup_ch' is not a valid Discord Channel ID (must be 17-20 digits). Skipping."
+    fi
+  else
+    info "STARTUP_CHANNEL_ID skipped"
+  fi
+fi
+
+# ── Offer to save .env ──
+if [[ "$ENV_CHANGED" == "true" ]] && [[ -t 0 ]]; then
+  echo ""
+  echo -e "  ${YELLOW} SAVE ${NC}"
+  echo -e "  Save these values to ${CYAN}$ENV_FILE${NC}?"
+  echo -e "  So you don't have to enter them again next time."
+  echo ""
+  read -rp "  ▸ Save to .env? [Y/n] " _save_answer
+  if [[ -z "$_save_answer" || "$_save_answer" =~ ^[yYjJ] ]]; then
+    {
+      echo "# Discord Autopilot — auto-generated $(date +%Y-%m-%d)"
+      echo "DISCORD_TOKEN=$DISCORD_TOKEN"
+      echo "REPO_URL=$REPO_URL"
+      [[ -n "${GITHUB_TOKEN:-}" ]]      && echo "GITHUB_TOKEN=$GITHUB_TOKEN"
+      [[ -n "${ADMIN_USER_ID:-}" ]]      && echo "ADMIN_USER_ID=$ADMIN_USER_ID"
+      [[ -n "${STARTUP_CHANNEL_ID:-}" ]] && echo "STARTUP_CHANNEL_ID=$STARTUP_CHANNEL_ID"
+      # preserve extra keys from existing .env
+      if [[ -f "$ENV_FILE" ]]; then
+        while IFS= read -r line; do
+          key="${line%%=*}"
+          key="${key// /}"
+          case "$key" in
+            DISCORD_TOKEN|REPO_URL|GITHUB_TOKEN|ADMIN_USER_ID|STARTUP_CHANNEL_ID|""|"#"*) ;;
+            *) echo "$line" ;;
+          esac
+        done < "$ENV_FILE"
+      fi
+    } > "$ENV_FILE"
+    ok ".env saved"
+  else
+    info ".env not saved"
+  fi
+fi
+
+echo ""
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Credential & access validation

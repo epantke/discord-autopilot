@@ -243,31 +243,20 @@
       <div class="tab-content active" data-tab="linux">
         <div class="code-block">
           <button class="copy-btn" aria-label="Copy code">📋 Copy</button>
-<pre>export DISCORD_TOKEN="your-token"
-export REPO_URL="https://github.com/user/repo.git"
-
-chmod +x agent.sh
-./agent.sh</pre>
+<pre>curl -fsSL https://github.com/epantke/discord-autopilot/releases/latest/download/agent.sh -o agent.sh && bash agent.sh</pre>
         </div>
       </div>
 
       <div class="tab-content" data-tab="windows">
         <div class="code-block">
           <button class="copy-btn" aria-label="Copy code">📋 Copy</button>
-<pre>.\agent.ps1
-# Interactive setup wizard
-# Validates tokens, clones repo, starts bot</pre>
+<pre>irm https://github.com/epantke/discord-autopilot/releases/latest/download/agent.ps1 -OutFile agent.ps1; .\agent.ps1</pre>
         </div>
       </div>
     </div>
 
     <div class="reveal" style="margin-top: 24px;">
-      <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 12px;">Or create a <code>.env</code> file:</p>
-      <div class="code-block standalone">
-        <button class="copy-btn" aria-label="Copy code">📋 Copy</button>
-<pre>DISCORD_TOKEN=your-bot-token
-REPO_URL=https://github.com/user/repo.git</pre>
-      </div>
+      <p style="color: var(--text-muted); font-size: 0.9rem;">Just paste and run — the script guides you through setup interactively (tokens, repo URL, optional config) and offers to save everything to a <code>.env</code> file.</p>
     </div>
   </section>
 
