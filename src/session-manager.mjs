@@ -242,6 +242,15 @@ async function createWorktree(channelId) {
   }
 
   try {
+    await execFileAsync("git", ["worktree", "prune"], {
+      cwd: repoPath,
+      timeout: 10_000,
+    });
+  } catch {
+    // best effort — clear stale worktree registrations
+  }
+
+  try {
     await execFileAsync("git", ["worktree", "add", worktreePath, branchName], {
       cwd: repoPath,
       timeout: 30_000,
