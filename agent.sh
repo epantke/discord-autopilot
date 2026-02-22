@@ -14,7 +14,7 @@ warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 die()   { echo -e "${RED}[FATAL]${NC} $*" >&2; exit 1; }
 # ── Version & update config ──────────────────────────────────────────────────────
 SCRIPT_VERSION="0.0.0-dev"
-UPDATE_REPO="epantke/remote-coding-agent"
+UPDATE_REPO="epantke/discord-autopilot"
 UPDATE_API_URL="https://api.github.com/repos/$UPDATE_REPO/releases/latest"
 # ──────────────────────────────────────────────────────────────────────────────
 # 1) Load .env if present, then single question: Repo URL
