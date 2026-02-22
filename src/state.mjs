@@ -342,6 +342,16 @@ export function pruneOldTasks() {
   return stmtPruneOldTasks.run().changes;
 }
 
+const stmtRecentTasks = db.prepare(
+  `SELECT prompt, status, started_at FROM task_history
+   WHERE channel_id = ? ORDER BY started_at DESC LIMIT ?`
+);
+
+/** Get recent tasks for a channel (most recent first). */
+export function getRecentTasks(channelId, limit = 10) {
+  return stmtRecentTasks.all(channelId, limit);
+}
+
 let dbClosed = false;
 
 export function closeDb() {

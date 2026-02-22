@@ -18,7 +18,7 @@ const SOUL_PROMPT = readFileSync(join(__dirname, "..", "llm", "SOUL.md"), "utf-8
  * @param {string} opts.branch - Current git branch
  * @returns {string}
  */
-export function buildSelfAwarenessPrompt({ botName, workspacePath, branch }) {
+export function buildSelfAwarenessPrompt({ botName, workspacePath, branch, recentTasks }) {
   const capabilities = [
     `You are "${botName}", an autonomous coding agent running as a Discord bot (v${CURRENT_VERSION}, project: ${PROJECT_NAME}).`,
     "",
@@ -80,5 +80,20 @@ export function buildSelfAwarenessPrompt({ botName, workspacePath, branch }) {
     "6. Be conversational and helpful. You are not just a task executor — you can chat, explain, and discuss.",
   ].join("\n");
 
-  return [IDENTITY_PROMPT, SOUL_PROMPT, capabilities].join("\n\n");
+  const parts = [IDENTITY_PROMPT, SOUL_PROMPT, capabilities];
+
+  if (recentTasks && recentTasks.length > 0) {
+    const history = recentTasks
+      .reverse()
+      .map((t) => `- [${t.status}] ${t.prompt.slice(0, 200)}`)
+      .join("\n");
+    parts.push(
+      "## Session Recovery\n" +
+      "This session was recovered after a restart. Here are the recent tasks from this channel " +
+      "(you don't have the full conversation context, but this gives you an idea of what was discussed):\n" +
+      history
+    );
+  }
+
+  return parts.join("\n\n");
 }

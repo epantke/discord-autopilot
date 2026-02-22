@@ -16,6 +16,7 @@ import {
   getResponders as dbGetResponders,
   deleteRespondersByChannel,
   pruneOldTasks,
+  getRecentTasks,
 } from "./state.mjs";
 import { createAgentSession, listAvailableModels } from "./copilot-client.mjs";
 import {
@@ -144,11 +145,13 @@ async function _createSession(channelId, channel) {
   // Check DB for existing session
   const dbRow = getSession(channelId);
   let workspacePath, branch, model;
+  let recentTasks = null;
 
   if (dbRow && existsSync(dbRow.workspace_path)) {
     workspacePath = dbRow.workspace_path;
     branch = dbRow.branch;
     model = dbRow.model || DEFAULT_MODEL;
+    recentTasks = getRecentTasks(channelId, 10);
   } else {
     const wt = await createWorktree(channelId);
     workspacePath = wt.workspacePath;
@@ -165,7 +168,7 @@ async function _createSession(channelId, channel) {
     channelId,
     workspacePath,
     model,
-    botInfo: { botName, branch },
+    botInfo: { botName, branch, recentTasks },
 
     onPushRequest: async (command) => {
       return createPushApprovalRequest(channel, workspacePath, command);
@@ -210,7 +213,7 @@ async function _createSession(channelId, channel) {
     onIdle: () => {
       const ctx = sessions.get(channelId);
       if (ctx) {
-        ctx.output?.finish("✨ **Task complete.**");
+        ctx.output?.finish("🖤 **Fertig~**");
         ctx.status = "idle";
         updateSessionStatus(channelId, "idle");
       }
@@ -384,7 +387,7 @@ async function processQueue(channelId, channel) {
     log.info("Task completed", { channelId, taskId: ctx.taskId });
     ctx.status = "idle";
     updateSessionStatus(channelId, "idle");
-    await ctx.output?.finish("✨ **Task complete.**");
+    await ctx.output?.finish("🖤 **Fertig~**");
     resolve(response);
   } catch (err) {
     // If aborted via /stop, cleanup was already handled
@@ -601,7 +604,7 @@ export async function changeModel(channelId, channel, newModel) {
       onIdle: () => {
         const c = sessions.get(channelId);
         if (c) {
-          c.output?.finish("✨ **Task complete.**");
+          c.output?.finish("🖤 **Fertig~**");
           c.status = "idle";
           updateSessionStatus(channelId, "idle");
         }

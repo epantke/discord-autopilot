@@ -186,6 +186,7 @@ export async function createAgentSession(opts) {
             botName: botInfo.botName || "Autopilot",
             workspacePath,
             branch: botInfo.branch || "(unknown)",
+            recentTasks: botInfo.recentTasks || null,
           })
         : [
             `You are an autonomous coding agent working in: ${workspacePath}`,
