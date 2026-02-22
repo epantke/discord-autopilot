@@ -40,8 +40,8 @@ function isInsideWorkspace(targetPath, workspaceRoot) {
 // ── Git Push Detection ──────────────────────────────────────────────────────
 
 const GIT_PUSH_PATTERNS = [
-  /\bgit\s+(?:(?:-[\w-]+(?:=\S+|\s+\S+)?)\s+)*push\b/i,
-  /\bgit\s+(?:(?:-[\w-]+(?:=\S+|\s+\S+)?)\s+)*remote\s+.*push\b/i,
+  /\bgit\s+(?:(?:-[\w-]+(?:(?:\s*=\s*|\s+)\S+)?)\s+)*push\b/i,
+  /\bgit\s+(?:(?:-[\w-]+(?:(?:\s*=\s*|\s+)\S+)?)\s+)*remote\s+.*push\b/i,
   /\bgh\s+pr\s+create\b/i,
   /\bgh\s+pr\s+merge\b/i,
   /\bgh\s+pr\s+push\b/i,
