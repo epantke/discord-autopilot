@@ -186,6 +186,7 @@ export async function createAgentSession(opts) {
             botName: botInfo.botName || "Autopilot",
             workspacePath,
             branch: botInfo.branch || "(unknown)",
+            baseBranch: botInfo.baseBranch || null,
             recentTasks: botInfo.recentTasks || null,
           })
         : [

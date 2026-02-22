@@ -164,7 +164,21 @@ function runMigrations() {
     v = 5;
   }
 
-  // Future migrations go here as `if (v < 6) { ... setSchemaVersion(6); }`
+  if (v < 6) {
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS branch_overrides (
+          channel_id   TEXT PRIMARY KEY,
+          base_branch  TEXT NOT NULL,
+          set_at       TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      setSchemaVersion(6);
+    })();
+    v = 6;
+  }
+
+  // Future migrations go here as `if (v < 7) { ... setSchemaVersion(7); }`
 }
 
 runMigrations();
@@ -356,6 +370,41 @@ export function deleteRepoOverride(channelId) {
 
 export function getAllRepoOverrides() {
   return stmtAllRepoOverrides.all();
+}
+
+// ── Branch Overrides ────────────────────────────────────────────────────────
+const stmtUpsertBranchOverride = db.prepare(`
+  INSERT INTO branch_overrides (channel_id, base_branch)
+  VALUES (@channelId, @baseBranch)
+  ON CONFLICT(channel_id) DO UPDATE SET
+    base_branch = excluded.base_branch,
+    set_at      = datetime('now')
+`);
+
+const stmtGetBranchOverride = db.prepare(
+  `SELECT * FROM branch_overrides WHERE channel_id = ?`
+);
+
+const stmtDeleteBranchOverride = db.prepare(
+  `DELETE FROM branch_overrides WHERE channel_id = ?`
+);
+
+const stmtAllBranchOverrides = db.prepare(`SELECT * FROM branch_overrides`);
+
+export function upsertBranchOverride(channelId, baseBranch) {
+  stmtUpsertBranchOverride.run({ channelId, baseBranch });
+}
+
+export function getBranchOverride(channelId) {
+  return stmtGetBranchOverride.get(channelId) || null;
+}
+
+export function deleteBranchOverride(channelId) {
+  stmtDeleteBranchOverride.run(channelId);
+}
+
+export function getAllBranchOverrides() {
+  return stmtAllBranchOverrides.all();
 }
 
 // ── Stale state recovery ────────────────────────────────────────────────────

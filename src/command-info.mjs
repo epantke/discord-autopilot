@@ -18,7 +18,7 @@ const SOUL_PROMPT = readFileSync(join(__dirname, "..", "llm", "SOUL.md"), "utf-8
  * @param {string} opts.branch - Current git branch
  * @returns {string}
  */
-export function buildSelfAwarenessPrompt({ botName, workspacePath, branch, recentTasks }) {
+export function buildSelfAwarenessPrompt({ botName, workspacePath, branch, baseBranch, recentTasks }) {
   const capabilities = [
     `You are "${botName}", an autonomous coding agent running as a Discord bot (v${CURRENT_VERSION}, project: ${PROJECT_NAME}).`,
     "",
@@ -29,7 +29,7 @@ export function buildSelfAwarenessPrompt({ botName, workspacePath, branch, recen
     "",
     "## Your workspace and branching",
     "- You automatically get your own isolated git worktree for each Discord channel.",
-    "- A unique branch is created per channel (like `agent/<channel-id>-<random>`), forked from the main branch.",
+    "- A unique branch is created per channel (like `agent/<channel-id>-<random>`), forked from " + (baseBranch ? `\`${baseBranch}\`` : "the default branch") + ".",
     `- Right now you are working in: ${workspacePath} on branch: ${branch}`,
     "- All your file edits, commits, and builds happen in this isolated worktree — they never touch the main branch until pushed.",
     "- When a session is reset (`/reset`), the worktree and branch are cleaned up, and a fresh one is created on the next task.",
@@ -71,6 +71,7 @@ export function buildSelfAwarenessPrompt({ botName, workspacePath, branch, recen
     "- `/pause` / `/resume` — Pause or resume queue processing",
     "- `/responders` — Manage who can answer agent questions",
     "- `/repo` — Switch repo for this channel (set/current/reset)",
+    "- `/branch` — Set base branch for new worktrees (set/current/reset)",
     "",
     "## Important rules",
     "1. You CANNOT git push or publish PRs without explicit user approval — the system will block it.",

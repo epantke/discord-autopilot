@@ -35,6 +35,7 @@ import {
   STARTUP_CHANNEL_ID,
   ADMIN_USER_ID,
   DEFAULT_MODEL,
+  DEFAULT_BRANCH,
   CURRENT_VERSION,
   UPDATE_CHECK_INTERVAL_MS,
   AUTO_RETRY_ON_CRASH,
@@ -56,6 +57,9 @@ import {
   setChannelRepo,
   getChannelRepo,
   clearChannelRepo,
+  setChannelBranch,
+  getChannelBranch,
+  clearChannelBranch,
   hasWorkingSessions,
 } from "./session-manager.mjs";
 
@@ -209,6 +213,25 @@ const commands = [
     )
     .addStringOption((opt) =>
       opt.setName("url").setDescription("GitHub-URL oder owner/repo")
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
+    .setName("branch")
+    .setDescription("Base-Branch für neue Worktrees in diesem Channel")
+    .addStringOption((opt) =>
+      opt
+        .setName("action")
+        .setDescription("Aktion")
+        .setRequired(true)
+        .addChoices(
+          { name: "Branch setzen", value: "set" },
+          { name: "Aktueller Branch", value: "current" },
+          { name: "Zurück zum Standard", value: "reset" }
+        )
+    )
+    .addStringOption((opt) =>
+      opt.setName("name").setDescription("Branch-Name (z.B. develop, main)")
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 ];
@@ -965,6 +988,7 @@ client.on("interactionCreate", async (interaction) => {
             { name: "Base Root", value: `\`${BASE_ROOT}\``, inline: false },
             { name: "Workspaces Root", value: `\`${WORKSPACES_ROOT}\``, inline: false },
             { name: "Standard-Modell", value: DEFAULT_MODEL || "*(SDK Standard)*", inline: true },
+            { name: "Standard-Branch", value: DEFAULT_BRANCH || "*(Remote-Default)*", inline: true },
             { name: "Edit Throttle", value: `${DISCORD_EDIT_THROTTLE_MS} ms`, inline: true },
             { name: "Standard Grant-Modus", value: DEFAULT_GRANT_MODE, inline: true },
             { name: "Default Grant TTL", value: `${DEFAULT_GRANT_TTL_MIN} min`, inline: true },

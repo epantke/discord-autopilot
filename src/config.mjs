@@ -85,6 +85,10 @@ const ALLOWED_DM_USERS = csvToValidatedSet(process.env.ALLOWED_DM_USERS, "ALLOWE
 // ── Model ───────────────────────────────────────────────────────────────────
 const DEFAULT_MODEL = process.env.DEFAULT_MODEL || "claude-opus-4.6";
 
+// ── Default Branch ──────────────────────────────────────────────────────────
+// Optional: base branch for new worktrees. null = use the remote default (HEAD).
+const DEFAULT_BRANCH = process.env.DEFAULT_BRANCH || null;
+
 // ── Limits ──────────────────────────────────────────────────────────────────
 const MAX_QUEUE_SIZE = safeInt(process.env.MAX_QUEUE_SIZE, 50);
 const MAX_PROMPT_LENGTH = safeInt(process.env.MAX_PROMPT_LENGTH, 4000);
@@ -141,4 +145,5 @@ export {
   AGENT_SCRIPT_PATH,
   AUTO_RETRY_ON_CRASH,
   AUTO_APPROVE_PUSH,
+  DEFAULT_BRANCH,
 };

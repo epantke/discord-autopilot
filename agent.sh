@@ -291,6 +291,7 @@ if [[ "$ENV_CHANGED" == "true" ]] && [[ -t 0 ]]; then
       echo "DISCORD_TOKEN=$DISCORD_TOKEN"
       echo "REPO_URL=$REPO_URL"
       [[ -n "${GITHUB_TOKEN:-}" ]]      && echo "GITHUB_TOKEN=$GITHUB_TOKEN"
+      [[ -n "${DEFAULT_BRANCH:-}" ]]     && echo "DEFAULT_BRANCH=$DEFAULT_BRANCH"
       [[ -n "${ADMIN_USER_ID:-}" ]]      && echo "ADMIN_USER_ID=$ADMIN_USER_ID"
       [[ -n "${STARTUP_CHANNEL_ID:-}" ]] && echo "STARTUP_CHANNEL_ID=$STARTUP_CHANNEL_ID"
       # preserve extra keys from existing .env
@@ -299,7 +300,7 @@ if [[ "$ENV_CHANGED" == "true" ]] && [[ -t 0 ]]; then
           key="${line%%=*}"
           key="${key// /}"
           case "$key" in
-            DISCORD_TOKEN|REPO_URL|GITHUB_TOKEN|ADMIN_USER_ID|STARTUP_CHANNEL_ID|""|"#"*) ;;
+            DISCORD_TOKEN|REPO_URL|GITHUB_TOKEN|DEFAULT_BRANCH|ADMIN_USER_ID|STARTUP_CHANNEL_ID|""|"#"*) ;;
             *) echo "$line" ;;
           esac
         done < "$ENV_FILE"
@@ -524,6 +525,43 @@ else
   ok "Repo cloned"
 fi
 
+# ── DEFAULT_BRANCH (interactive branch picker) ──
+if [[ -n "${DEFAULT_BRANCH:-}" ]]; then
+  ok "DEFAULT_BRANCH: $DEFAULT_BRANCH"
+elif [[ -t 0 ]]; then
+  # Collect remote branches (strip origin/ prefix, ignore HEAD)
+  mapfile -t _branches < <(
+    git -C "$REPO_DIR" branch -r 2>/dev/null \
+      | sed 's/^[* ]*//' \
+      | grep -v '\->' \
+      | sed 's|^origin/||' \
+      | sort -u
+  )
+  if [[ ${#_branches[@]} -gt 1 ]]; then
+    echo ""
+    echo -e "  ${CYAN} DEFAULT_BRANCH ${NC} (optional)"
+    echo ""
+    echo -e "  Pick the base branch for new worktrees."
+    echo -e "  Can be changed later via ${CYAN}/branch set${NC}."
+    echo ""
+    for i in "${!_branches[@]}"; do
+      printf "    ${CYAN}%2d${NC})  %s\n" "$((i+1))" "${_branches[$i]}"
+    done
+    echo ""
+    read -rp "  ▸ Number (or Enter for remote default): " _pick
+    if [[ -n "$_pick" ]] && [[ "$_pick" =~ ^[0-9]+$ ]] && (( _pick >= 1 && _pick <= ${#_branches[@]} )); then
+      export DEFAULT_BRANCH="${_branches[$((_pick-1))]}"
+      ENV_CHANGED=true
+      ok "DEFAULT_BRANCH set to '$DEFAULT_BRANCH'"
+    else
+      [[ -n "$_pick" ]] && warn "Invalid selection — using remote default."
+      info "DEFAULT_BRANCH skipped (remote default)"
+    fi
+  else
+    info "Only one branch found — using remote default."
+  fi
+fi
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) Copy application files from src/
 # ──────────────────────────────────────────────────────────────────────────────
@@ -574,6 +612,7 @@ echo ""
 
 export PROJECT_NAME
 export REPO_PATH="$REPO_DIR"
+export DEFAULT_BRANCH="${DEFAULT_BRANCH:-}"
 export AGENT_SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 
 # Validate snowflake IDs (17-20 digits)

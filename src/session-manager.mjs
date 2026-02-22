@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { WORKSPACES_ROOT, REPOS_ROOT, PROJECT_NAME, REPO_PATH, GITHUB_TOKEN, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, DEFAULT_MODEL, AUTO_APPROVE_PUSH } from "./config.mjs";
+import { WORKSPACES_ROOT, REPOS_ROOT, PROJECT_NAME, REPO_PATH, GITHUB_TOKEN, TASK_TIMEOUT_MS, MAX_QUEUE_SIZE, MAX_PROMPT_LENGTH, ADMIN_USER_ID, ADMIN_ROLE_IDS, DEFAULT_MODEL, AUTO_APPROVE_PUSH, DEFAULT_BRANCH } from "./config.mjs";
 import {
   upsertSession,
   getSession,
@@ -20,6 +20,9 @@ import {
   upsertRepoOverride,
   deleteRepoOverride,
   getAllRepoOverrides,
+  upsertBranchOverride,
+  deleteBranchOverride as dbDeleteBranchOverride,
+  getAllBranchOverrides,
 } from "./state.mjs";
 import { createAgentSession, listAvailableModels } from "./copilot-client.mjs";
 import {
@@ -54,6 +57,12 @@ const responderStore = new Map();
 const repoOverrides = new Map();
 
 /**
+ * In-memory branch override per channel.
+ * Map< channelId, string >
+ */
+const branchOverrides = new Map();
+
+/**
  * In-flight clone promises to prevent concurrent clones for the same project.
  * Map< projectName, Promise<string> >
  */
@@ -68,6 +77,11 @@ for (const row of getAllRepoOverrides()) {
   });
 }
 
+// Restore branch overrides from DB on startup
+for (const row of getAllBranchOverrides()) {
+  branchOverrides.set(row.channel_id, row.base_branch);
+}
+
 /**
  * Get effective repo config for a channel (override or default).
  */
@@ -75,6 +89,14 @@ function getEffectiveRepo(channelId) {
   const override = repoOverrides.get(channelId);
   if (override) return { repoPath: override.repoPath, projectName: override.projectName };
   return { repoPath: REPO_PATH, projectName: PROJECT_NAME };
+}
+
+/**
+ * Get effective base branch for a channel (override > DEFAULT_BRANCH > null).
+ * null means "use HEAD" (the remote default).
+ */
+function getEffectiveBranch(channelId) {
+  return branchOverrides.get(channelId) || DEFAULT_BRANCH || null;
 }
 
 /**
@@ -193,6 +215,62 @@ export async function clearChannelRepo(channelId) {
   return had;
 }
 
+// ── Branch Overrides ───────────────────────────────────────────────────────────
+
+/**
+ * Set a branch override for a channel. Validates the branch exists on the remote.
+ * Resets any existing session so the next task uses the new base branch.
+ * @returns {{ ok: boolean, error?: string }}
+ */
+export async function setChannelBranch(channelId, branch) {
+  const { repoPath } = getEffectiveRepo(channelId);
+
+  // Fetch and validate the branch exists on the remote
+  try {
+    await execFileAsync("git", ["fetch", "origin", branch], {
+      cwd: repoPath, timeout: 30_000,
+    });
+  } catch {
+    return { ok: false, error: `Branch \`${branch}\` konnte nicht gefetcht werden. Existiert er auf dem Remote?` };
+  }
+
+  try {
+    await execFileAsync("git", ["rev-parse", "--verify", `origin/${branch}`], {
+      cwd: repoPath, timeout: 5_000,
+    });
+  } catch {
+    return { ok: false, error: `Branch \`${branch}\` existiert nicht auf dem Remote.` };
+  }
+
+  await resetSession(channelId);
+  branchOverrides.set(channelId, branch);
+  upsertBranchOverride(channelId, branch);
+  log.info("Branch override set", { channelId, branch });
+  return { ok: true };
+}
+
+/**
+ * Get current branch info for a channel.
+ */
+export function getChannelBranch(channelId) {
+  const override = branchOverrides.get(channelId);
+  return {
+    isOverride: !!override,
+    branch: override || DEFAULT_BRANCH || null,
+  };
+}
+
+/**
+ * Clear branch override for a channel, reverting to DEFAULT_BRANCH or remote default.
+ */
+export async function clearChannelBranch(channelId) {
+  const had = branchOverrides.has(channelId);
+  branchOverrides.delete(channelId);
+  dbDeleteBranchOverride(channelId);
+  await resetSession(channelId);
+  return had;
+}
+
 /**
  * @typedef {object} SessionContext
  * @property {import("@github/copilot-sdk").CopilotSession} copilotSession
@@ -232,8 +310,28 @@ async function createWorktree(channelId) {
 
   const branchName = `agent/${channelId.slice(-8)}-${Date.now().toString(36)}`;
 
+  // Determine base ref: channel override > DEFAULT_BRANCH > HEAD
+  const baseBranch = getEffectiveBranch(channelId);
+  let baseRef = "HEAD";
+  if (baseBranch) {
+    // Fetch latest and resolve the remote branch
+    try {
+      await execFileAsync("git", ["fetch", "origin", baseBranch], {
+        cwd: repoPath, timeout: 30_000,
+      });
+    } catch { /* best effort — may already be up to date */ }
+    try {
+      const { stdout } = await execFileAsync("git", ["rev-parse", "--verify", `origin/${baseBranch}`], {
+        cwd: repoPath, encoding: "utf-8", timeout: 5_000,
+      });
+      if (stdout.trim()) baseRef = `origin/${baseBranch}`;
+    } catch {
+      log.warn("Base branch not found on remote, falling back to HEAD", { baseBranch, channelId });
+    }
+  }
+
   try {
-    await execFileAsync("git", ["branch", branchName, "HEAD"], {
+    await execFileAsync("git", ["branch", branchName, baseRef], {
       cwd: repoPath,
       timeout: 10_000,
     });
@@ -419,7 +517,7 @@ async function _createSession(channelId, channel) {
     channelId,
     workspacePath,
     model,
-    botInfo: { botName, branch, recentTasks },
+    botInfo: { botName, branch, baseBranch: getEffectiveBranch(channelId), recentTasks },
     ..._buildSessionHooks(channelId, channel),
   });
       break; // success
@@ -736,7 +834,7 @@ export async function changeModel(channelId, channel, newModel) {
       channelId,
       workspacePath: ctx.workspacePath,
       model: newModel,
-      botInfo: { botName, branch: ctx.branch },
+      botInfo: { botName, branch: ctx.branch, baseBranch: getEffectiveBranch(channelId) },
       ..._buildSessionHooks(channelId, channel),
     });
   } catch (err) {

@@ -490,13 +490,15 @@ if ($script:EnvChanged) {
         $lines += "REPO_URL=$([Environment]::GetEnvironmentVariable('REPO_URL','Process'))"
         $gh = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN','Process')
         if ($gh) { $lines += "GITHUB_TOKEN=$gh" }
+        $defBranch = [Environment]::GetEnvironmentVariable('DEFAULT_BRANCH','Process')
+        if ($defBranch) { $lines += "DEFAULT_BRANCH=$defBranch" }
         $adminId = [Environment]::GetEnvironmentVariable('ADMIN_USER_ID','Process')
         if ($adminId) { $lines += "ADMIN_USER_ID=$adminId" }
         $startupCh = [Environment]::GetEnvironmentVariable('STARTUP_CHANNEL_ID','Process')
         if ($startupCh) { $lines += "STARTUP_CHANNEL_ID=$startupCh" }
         # preserve any extra keys from existing .env
         if (Test-Path $EnvFile) {
-            $known = @('DISCORD_TOKEN','REPO_URL','GITHUB_TOKEN','ADMIN_USER_ID','STARTUP_CHANNEL_ID')
+            $known = @('DISCORD_TOKEN','REPO_URL','GITHUB_TOKEN','DEFAULT_BRANCH','ADMIN_USER_ID','STARTUP_CHANNEL_ID')
             Get-Content $EnvFile | ForEach-Object {
                 $l = $_.Trim()
                 if ($l -and -not $l.StartsWith('#') -and $l -match '^([^=]+)=') {
@@ -873,6 +875,51 @@ if (Test-Path (Join-Path $RepoDir '.git')) {
     Write-Ok 'Repo cloned'
 }
 
+# ── DEFAULT_BRANCH (interactive branch picker) ──
+$cfgBranch = [Environment]::GetEnvironmentVariable('DEFAULT_BRANCH','Process')
+if ($cfgBranch) {
+    Write-Ok "DEFAULT_BRANCH: $cfgBranch"
+} else {
+    $rawBranches = git -C $RepoDir branch -r 2>&1 | Out-String
+    $branches = ($rawBranches -split "`n") | ForEach-Object { $_.Trim(' ', '*') } | Where-Object { $_ -and $_ -notmatch '->' } | ForEach-Object { $_ -replace '^origin/', '' } | Sort-Object -Unique
+    if ($branches -and $branches.Count -gt 1) {
+        Write-Host ''
+        Write-Host '  ' -NoNewline
+        Write-Host ' DEFAULT_BRANCH ' -ForegroundColor Black -BackgroundColor DarkCyan -NoNewline
+        Write-Host ' (optional)' -ForegroundColor DarkGray
+        Write-Host ''
+        Write-Host '  Pick the base branch for new worktrees.' -ForegroundColor Gray
+        Write-Host '  Can be changed later via ' -ForegroundColor Gray -NoNewline
+        Write-Host '/branch set' -ForegroundColor Cyan -NoNewline
+        Write-Host '.' -ForegroundColor Gray
+        Write-Host ''
+        for ($i = 0; $i -lt $branches.Count; $i++) {
+            Write-Host '    ' -NoNewline
+            Write-Host ('{0,2}' -f ($i + 1)) -ForegroundColor Cyan -NoNewline
+            Write-Host ")  $($branches[$i])" -ForegroundColor White
+        }
+        Write-Host ''
+        Write-Host "  $([char]0x25B8) " -ForegroundColor DarkCyan -NoNewline
+        $pick = Read-Host 'Number (or Enter for remote default)'
+        if ($pick -match '^\d+$') {
+            $idx = [int]$pick - 1
+            if ($idx -ge 0 -and $idx -lt $branches.Count) {
+                $cfgBranch = $branches[$idx]
+                [Environment]::SetEnvironmentVariable('DEFAULT_BRANCH', $cfgBranch, 'Process')
+                $script:EnvChanged = $true
+                Write-Ok "DEFAULT_BRANCH set to '$cfgBranch'"
+            } else {
+                Write-Warn 'Invalid selection — using remote default.'
+                Write-Info 'DEFAULT_BRANCH skipped (remote default)'
+            }
+        } else {
+            Write-Info 'DEFAULT_BRANCH skipped (remote default)'
+        }
+    } else {
+        Write-Info 'Only one branch found — using remote default.'
+    }
+}
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 6) Copy application files from src/
 # ──────────────────────────────────────────────────────────────────────────────
@@ -989,6 +1036,7 @@ Write-Host ''
 
 $env:PROJECT_NAME      = $ProjectName
 $env:REPO_PATH         = $RepoDir
+$env:DEFAULT_BRANCH    = [Environment]::GetEnvironmentVariable('DEFAULT_BRANCH','Process')
 $env:ADMIN_USER_ID     = [Environment]::GetEnvironmentVariable('ADMIN_USER_ID','Process')
 $env:STARTUP_CHANNEL_ID = [Environment]::GetEnvironmentVariable('STARTUP_CHANNEL_ID','Process')
 $env:AGENT_SCRIPT_PATH = $MyInvocation.MyCommand.Definition
