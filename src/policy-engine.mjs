@@ -84,8 +84,8 @@ function extractSubCommands(command) {
 
 function isGitPushCommand(command) {
   const parts = extractSubCommands(command);
-  // Also detect dangerous wrappers like eval/source that can hide push commands
-  if (DANGEROUS_WRAPPERS.test(command)) return true;
+  // Detect dangerous wrappers (eval/source) only when the command also references git push
+  if (DANGEROUS_WRAPPERS.test(command) && /\bgit\b/i.test(command) && /\bpush\b/i.test(command)) return true;
   // Detect env-variable prefix pattern: VAR=val git push
   if (/\b\w+=\S+\s+git\s+push\b/i.test(command)) return true;
   return parts.some((part) =>

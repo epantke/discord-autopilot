@@ -147,7 +147,9 @@ jobs:
       - name: PowerShell syntax check
         shell: pwsh
         run: |
-          $null = [System.Management.Automation.Language.Parser]::ParseFile("$PWD/dist/agent.ps1", [ref]$null, [ref]$errors)
+          $tokens = $null
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile("$PWD/dist/agent.ps1", [ref]$tokens, [ref]$errors)
           if ($errors.Count -gt 0) {
             $errors | ForEach-Object { Write-Error $_.ToString() }
             exit 1

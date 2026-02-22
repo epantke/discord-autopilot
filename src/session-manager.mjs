@@ -306,7 +306,7 @@ async function _createSession(channelId, channel) {
       const target = ctx?.output?.channel || channel;
       target
         .send(
-          `⛓️ **Zugriff verweigert**\n${reason}\n\n` +
+          `⛓️ **Zugriff verweigert**\n${redactSecrets(reason).clean}\n\n` +
             `Nutze \`/grant path:<pfad> mode:ro ttl:30\` für Zugriff~`
         )
         .catch(() => {});
@@ -353,7 +353,7 @@ async function _createSession(channelId, channel) {
       // Post question in the output channel (thread) where the user sees output
       const target = ctx?.output?.channel || channel;
       await target.send(
-        `👁️ **Nyx fragt~**\n${question}` +
+        `👁️ **Nyx fragt~**\n${redactSecrets(question).clean}` +
           (choices ? `\nOptionen: ${choices.join(", ")}` : "")
       );
 
@@ -699,7 +699,7 @@ export async function changeModel(channelId, channel, newModel) {
         const target = c?.output?.channel || channel;
         target
           .send(
-            `⛓️ **Zugriff verweigert**\n${reason}\n\n` +
+            `⛓️ **Zugriff verweigert**\n${redactSecrets(reason).clean}\n\n` +
               `Nutze \`/grant path:<pfad> mode:ro ttl:30\` für Zugriff~`
           )
           .catch(() => {});
@@ -745,7 +745,7 @@ export async function changeModel(channelId, channel, newModel) {
 
         const target = c?.output?.channel || channel;
         await target.send(
-          `👁️ **Nyx fragt~**\n${question}` +
+          `👁️ **Nyx fragt~**\n${redactSecrets(question).clean}` +
             (choices ? `\nOptionen: ${choices.join(", ")}` : "")
         );
 
