@@ -368,10 +368,6 @@ const stmtUpsertRepoOverride = db.prepare(`
     set_at       = datetime('now')
 `);
 
-const stmtGetRepoOverride = db.prepare(
-  `SELECT * FROM repo_overrides WHERE channel_id = ?`
-);
-
 const stmtDeleteRepoOverride = db.prepare(
   `DELETE FROM repo_overrides WHERE channel_id = ?`
 );
@@ -380,10 +376,6 @@ const stmtAllRepoOverrides = db.prepare(`SELECT * FROM repo_overrides`);
 
 export function upsertRepoOverride(channelId, repoUrl, repoPath, projectName) {
   stmtUpsertRepoOverride.run({ channelId, repoUrl, repoPath, projectName });
-}
-
-export function getRepoOverride(channelId) {
-  return stmtGetRepoOverride.get(channelId) || null;
 }
 
 export function deleteRepoOverride(channelId) {
@@ -403,10 +395,6 @@ const stmtUpsertBranchOverride = db.prepare(`
     set_at      = datetime('now')
 `);
 
-const stmtGetBranchOverride = db.prepare(
-  `SELECT * FROM branch_overrides WHERE channel_id = ?`
-);
-
 const stmtDeleteBranchOverride = db.prepare(
   `DELETE FROM branch_overrides WHERE channel_id = ?`
 );
@@ -415,10 +403,6 @@ const stmtAllBranchOverrides = db.prepare(`SELECT * FROM branch_overrides`);
 
 export function upsertBranchOverride(channelId, baseBranch) {
   stmtUpsertBranchOverride.run({ channelId, baseBranch });
-}
-
-export function getBranchOverride(channelId) {
-  return stmtGetBranchOverride.get(channelId) || null;
 }
 
 export function deleteBranchOverride(channelId) {
