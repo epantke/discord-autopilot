@@ -57,10 +57,6 @@ If there's no release yet, you can run directly from the cloned repo:
    # Windows (PowerShell)
    .\agent.ps1
    ```
-3. **Generate the fully self-contained scripts** — drop on any machine and run.
-    ```bash
-    node build.mjs     # → dist/agent.sh, dist/agent.ps1
-    ```
 
 ## Discord Bot Setup
 
