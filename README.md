@@ -40,6 +40,24 @@ irm https://github.com/epantke/discord-autopilot/releases/latest/download/agent.
 
 > **That's it.** Both scripts include an interactive setup wizard — just paste and run. You'll be guided through token setup, repo selection, and optional config. Everything is saved to a `.env` file for next time.
 
+## Slow Start (before first release)
+
+If there's no release yet, you can run directly from the cloned repo:
+
+1. **Clone the repo**
+   ```bash
+   git clone https://github.com/epantke/discord-autopilot.git
+   cd discord-autopilot
+   ```
+2. **Run** — the setup wizard handles dependencies, `.env`, and everything else
+   ```bash
+   # Linux / macOS
+   bash agent.sh
+
+   # Windows (PowerShell)
+   .\agent.ps1
+   ```
+
 ## Discord Bot Setup
 
 1. [Discord Developer Portal](https://discord.com/developers/applications) → New Application → Bot → copy token
@@ -143,14 +161,6 @@ src/
 ```
 
 </details>
-
-## Build
-
-```bash
-node build.mjs     # → dist/agent.sh, dist/agent.ps1
-```
-
-Generates fully self-contained scripts — drop on any machine and run.
 
 ## License
 
